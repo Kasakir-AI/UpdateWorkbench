@@ -1,0 +1,8 @@
+.build/
+.build-cache/
+.swiftpm/
+dist/
+release/
+.DS_Store
+# Local working notes (not published)
+Analysis/
