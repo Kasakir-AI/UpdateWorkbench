@@ -192,7 +192,8 @@ enum ElectronBackend {
         version.hasPrefix("v") || version.hasPrefix("V") ? String(version.dropFirst()) : version
     }
 
-    /// Picks one native ZIP (preferred, as electron-updater uses) or DMG. Ambiguity disables direct installation.
+    /// Picks one native DMG (preferred: a disk image carries the app exactly as signed) or, failing that, one native ZIP.
+    /// Ambiguity disables direct installation.
     static func select(_ metadata: Metadata, baseURL: URL, installedVersion: String,
                        architecture: String = SparkleBackend.hostArchitecture,
                        allowURL: (URL) -> Bool = HTTPFetcher.isSafeHTTPS) -> ElectronCheckResult? {
@@ -213,7 +214,7 @@ enum ElectronBackend {
         let native = marked.isEmpty ? unmarked : marked
         let chosen: Candidate?
         let zips = native.filter { $0.ext == "zip" }, dmgs = native.filter { $0.ext == "dmg" }
-        if zips.count == 1 { chosen = zips[0] } else if zips.isEmpty && dmgs.count == 1 { chosen = dmgs[0] } else { chosen = nil }
+        if dmgs.count == 1 { chosen = dmgs[0] } else if dmgs.isEmpty && zips.count == 1 { chosen = zips[0] } else { chosen = nil }
         guard let chosen else {
             return ElectronCheckResult(version: version, release: nil, releasePage: nil,
                                        note: "Electron update \(version) is available, but no single native macOS ZIP/DMG could be selected. Open the app to use its own updater.")

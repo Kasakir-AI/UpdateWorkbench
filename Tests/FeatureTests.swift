@@ -74,16 +74,21 @@ enum FeatureTests {
         let base = URL(string: "https://github.com/o/r/releases/download/v2.4.0/")!
         let github: (URL) -> Bool = { GitHubBackend.validGitHubURL($0, repository: "o/r", pathPrefix: "releases/download/") }
         let arm = ElectronBackend.select(metadata, baseURL: base, installedVersion: "2.3.9", architecture: "arm64", allowURL: github)
-        try expect(arm?.release?.downloadURL.lastPathComponent == "Horizon-2.4.0-arm64-mac.zip", "arm64 must prefer the native ZIP")
-        try expect(arm?.release?.sha512?.hasPrefix("AAAA") == true, "Selected payload keeps its checksum")
+        try expect(arm?.release?.downloadURL.lastPathComponent == "Horizon-2.4.0-arm64.dmg", "arm64 must prefer the native DMG over the ZIP")
+        try expect(arm?.release?.sha512?.hasPrefix("BBBB") == true, "Selected payload keeps its checksum")
+        var zipOnly = metadata; zipOnly.files.removeAll { $0.url.hasSuffix(".dmg") }
+        let armZIP = ElectronBackend.select(zipOnly, baseURL: base, installedVersion: "2.3.9", architecture: "arm64", allowURL: github)
+        try expect(armZIP?.release?.downloadURL.lastPathComponent == "Horizon-2.4.0-arm64-mac.zip" && armZIP?.release?.sha512?.hasPrefix("AAAA") == true, "Without a DMG the native ZIP is used")
         let intel = ElectronBackend.select(metadata, baseURL: base, installedVersion: "2.3.9", architecture: "x86_64", allowURL: github)
         try expect(intel?.release?.downloadURL.lastPathComponent == "Horizon-2.4.0-mac.zip", "Intel must select the unmarked x64 ZIP")
         try expect(ElectronBackend.select(metadata, baseURL: base, installedVersion: "2.4.0", architecture: "arm64") == nil, "Installed latest must not be offered")
         try expect(ElectronBackend.select(metadata, baseURL: base, installedVersion: "v2.3", architecture: "arm64")?.version == "2.4.0", "Leading v must be normalized")
         let foreign = ElectronBackend.select(metadata, baseURL: URL(string: "https://evil.example/")!, installedVersion: "1", architecture: "arm64", allowURL: github)
         try expect(foreign != nil && foreign?.release == nil, "Payloads outside the declared repository must not become direct downloads")
-        var ambiguous = metadata; ambiguous.files.append(.init(url: "Horizon-2.4.0-universal-mac.zip", sha512: String(repeating: "D", count: 88), size: 1))
+        var ambiguous = zipOnly; ambiguous.files.append(.init(url: "Horizon-2.4.0-universal-mac.zip", sha512: String(repeating: "D", count: 88), size: 1))
         try expect(ElectronBackend.select(ambiguous, baseURL: base, installedVersion: "1", architecture: "arm64")?.release == nil, "Multiple native ZIPs must stay a manual choice")
+        var twoDMGs = metadata; twoDMGs.files.append(.init(url: "Horizon-2.4.0-universal.dmg", sha512: String(repeating: "E", count: 88), size: 1))
+        try expect(ElectronBackend.select(twoDMGs, baseURL: base, installedVersion: "1", architecture: "arm64")?.release == nil, "Multiple native DMGs must stay a manual choice")
         var unsummed = metadata; unsummed.files = [.init(url: "App-arm64-mac.zip", sha512: nil, size: 1)]
         let noSum = ElectronBackend.select(unsummed, baseURL: base, installedVersion: "1", architecture: "arm64")
         try expect(noSum?.version == "2.4.0" && noSum?.release == nil, "A missing SHA-512 must disable direct installation")

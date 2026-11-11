@@ -96,8 +96,10 @@ enum GitHubBackend {
             default: return false
             }
         }
-        // Multiple native payloads (e.g. ZIP and DMG) remain an explicit manual choice.
-        let assetURL = candidates.count == 1 ? URL(string: candidates[0].browser_download_url) : nil
+        // A single native DMG wins over ZIPs; any other ambiguity remains an explicit manual choice.
+        let dmgs = candidates.filter { $0.name.lowercased().hasSuffix(".dmg") }
+        let chosen = dmgs.count == 1 ? dmgs[0] : (candidates.count == 1 ? candidates[0] : nil)
+        let assetURL = chosen.flatMap { URL(string: $0.browser_download_url) }
         return GitHubRelease(version: version, releasePageURL: page, downloadURL: assetURL)
     }
 

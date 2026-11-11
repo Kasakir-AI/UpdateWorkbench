@@ -7,6 +7,7 @@ mkdir -p "$test_work_dir/module-cache"
 # All backend sources; App.swift and AppServices.swift contain the SwiftUI entry point and UserNotifications calls.
 backend_sources="Sources/UpdateWorkbench/Core.swift
 Sources/UpdateWorkbench/SparkleBackend.swift
+Sources/UpdateWorkbench/ArchiveSafety.swift
 Sources/UpdateWorkbench/GitHubBackend.swift
 Sources/UpdateWorkbench/SecurityBackend.swift
 Sources/UpdateWorkbench/NetworkSettings.swift
@@ -22,6 +23,7 @@ xcrun swiftc -swift-version 6 -parse-as-library \
   Tests/FeatureTests.swift \
   Tests/BackendTests.swift \
   Tests/PresentationTests.swift \
+  Tests/ArchiveSafetyTests.swift \
   -o "$test_work_dir/backend-tests"
 "$test_work_dir/backend-tests"
 

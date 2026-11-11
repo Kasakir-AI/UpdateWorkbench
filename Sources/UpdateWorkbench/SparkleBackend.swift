@@ -115,8 +115,8 @@ enum SparkleBackend {
                 if mounted { _ = try? command("/usr/bin/hdiutil", ["detach", sourceRoot.path, "-quiet"]) }
             }
             if fileExtension == "zip" {
-                try preflightZIP(payload)
-                _ = try command("/usr/bin/ditto", ["-x", "-k", payload.path, sourceRoot.path])
+                // Validates every entry and link target before writing anything, then extracts.
+                try ArchiveSafety.extractZIP(payload, to: sourceRoot)
             } else {
                 _ = try command("/usr/bin/hdiutil", ["attach", payload.path, "-readonly", "-nobrowse", "-noautoopen", "-mountpoint", sourceRoot.path, "-plist"])
                 mounted = true
@@ -127,7 +127,7 @@ enum SparkleBackend {
             guard candidates.count == 1, let candidate = candidates.first else {
                 throw Failure(message: "The download must contain exactly one app matching the installed bundle identifier.")
             }
-            try validateLinks(in: candidate)
+            try ArchiveSafety.validateExtracted(app: candidate, rejectHardLinks: fileExtension == "zip")
             let newBundle = Bundle(url: candidate)
             let newVersion = newBundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
             let newBuild = newBundle?.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
@@ -156,7 +156,10 @@ enum SparkleBackend {
             }
             _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", original.path])
             let originalTeam = try signingTeam(original)
-            guard try signingTeam(candidate) == originalTeam else { throw Failure(message: "The update signing team differs from the installed app.") }
+            let candidateTeam = try signingTeam(candidate)
+            guard candidateTeam == originalTeam else {
+                throw Failure(message: "The update is signed by a different developer team (\(candidateTeam)) than the installed app (\(originalTeam)), so it was not installed. Use the app's own updater or the vendor's download page if you trust the new signer.")
+            }
             _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", candidate.path])
             _ = try command("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", candidate.path])
             let parent = original.deletingLastPathComponent()
@@ -257,31 +260,6 @@ enum SparkleBackend {
         return value
     }
 
-    private static func preflightZIP(_ archive: URL) throws {
-        let names = try command("/usr/bin/zipinfo", ["-1", archive.path]).split(separator: "\n", omittingEmptySubsequences: false)
-        guard names.count < 100_000 else { throw Failure(message: "The archive contains too many entries.") }
-        for name in names where !name.isEmpty {
-            let path = String(name)
-            guard !path.hasPrefix("/"), !path.contains("\\"), !path.contains("\0"),
-                  !path.split(separator: "/", omittingEmptySubsequences: false).contains("..") else {
-                throw Failure(message: "The archive contains an unsafe path.")
-            }
-        }
-        let listing = try command("/usr/bin/zipinfo", ["-l", archive.path])
-        // Reject ZIP symlinks before extraction: post-extraction validation alone
-        // cannot stop an archive from writing through a previously extracted link.
-        guard !listing.split(separator: "\n").contains(where: { $0.first == "l" }) else {
-            throw Failure(message: "This ZIP contains symbolic links. Use its vendor updater or a DMG distribution.")
-        }
-        let expression = try NSRegularExpression(pattern: #"(\d+) bytes uncompressed"#)
-        let fullRange = NSRange(listing.startIndex..<listing.endIndex, in: listing)
-        guard let match = expression.firstMatch(in: listing, range: fullRange),
-              let range = Range(match.range(at: 1), in: listing),
-              let expandedBytes = UInt64(listing[range]), expandedBytes <= 4_294_967_296 else {
-            throw Failure(message: "The archive expansion size is unknown or exceeds 4 GB.")
-        }
-    }
-
     private static func applicationCandidates(in root: URL) throws -> [URL] {
         let fm = FileManager.default
         var result: [URL] = []
@@ -300,25 +278,6 @@ enum SparkleBackend {
             }
         }
         return result
-    }
-
-    private static func validateLinks(in app: URL) throws {
-        let base = app.resolvingSymlinksInPath().path + "/"
-        guard let enumerator = FileManager.default.enumerator(at: app, includingPropertiesForKeys: [.isSymbolicLinkKey, .isRegularFileKey, .isDirectoryKey]) else {
-            throw Failure(message: "The application contents could not be validated.")
-        }
-        var count = 0
-        for case let url as URL in enumerator {
-            count += 1
-            guard count < 100_000 else { throw Failure(message: "The app contains too many filesystem entries.") }
-            let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey, .isDirectoryKey])
-            guard values.isSymbolicLink == true || values.isRegularFile == true || values.isDirectory == true else {
-                throw Failure(message: "The app contains an unsupported special filesystem entry.")
-            }
-            if values.isSymbolicLink == true {
-                guard url.resolvingSymlinksInPath().path.hasPrefix(base) else { throw Failure(message: "The app contains a symbolic link outside its bundle.") }
-            }
-        }
     }
 }
 

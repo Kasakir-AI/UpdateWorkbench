@@ -192,7 +192,7 @@ enum HTTPFetcher {
 }
 
 enum AppIdentity {
-    static let version = "0.3.1"
+    static let version = "0.3.2"
     static let userAgent = "UpdateWorkbench/\(version)"
 }
 
