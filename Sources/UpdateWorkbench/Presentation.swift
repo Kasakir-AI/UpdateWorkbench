@@ -18,6 +18,7 @@ enum SidebarSection: String, CaseIterable, Sendable, Identifiable {
     case packages = "Packages"
     case suggestions = "Suggestions"
     case ignored = "Ignored"
+    case history = "History"
     case permissions = "Permissions"
     var id: String { rawValue }
     var symbol: String {
@@ -27,6 +28,7 @@ enum SidebarSection: String, CaseIterable, Sendable, Identifiable {
         case .packages: "shippingbox.fill"
         case .suggestions: "lightbulb.fill"
         case .ignored: "eye.slash.fill"
+        case .history: "clock.arrow.circlepath"
         case .permissions: "lock.shield.fill"
         }
     }
@@ -36,7 +38,8 @@ enum SidebarSection: String, CaseIterable, Sendable, Identifiable {
         case .applications: "Everything installed in your app folders"
         case .packages: "Command-line tools installed with Homebrew"
         case .suggestions: "Ways to keep more apps up to date"
-        case .ignored: "Ignored apps, skipped versions and snoozes"
+        case .ignored: "Ignored apps, skipped versions, held betas and snoozes"
+        case .history: "A log of every update attempt"
         case .permissions: "What Update Workbench can access"
         }
     }
@@ -50,6 +53,7 @@ enum ItemStatus: String, Sendable, Equatable {
     case selfUpdating = "Updates itself"
     case snoozed = "Snoozed"
     case skipped = "Version skipped"
+    case heldBack = "Pre-release held"
     case ignored = "Ignored"
     case upToDate = "Up to date"
     case unknown = "No update source"
@@ -62,6 +66,7 @@ enum ItemStatus: String, Sendable, Equatable {
         case .selfUpdating: "arrow.triangle.2.circlepath"
         case .snoozed: "moon.zzz.fill"
         case .skipped: "forward.end.fill"
+        case .heldBack: "flask.fill"
         case .ignored: "eye.slash.fill"
         case .upToDate: "checkmark.seal.fill"
         case .unknown: "questionmark.circle"
@@ -70,10 +75,11 @@ enum ItemStatus: String, Sendable, Equatable {
 
     /// Precedence: failure > user choices (ignore, skip, snooze) > update state.
     static func classify(_ item: UpdateItem, ignored: Bool, skippedVersion: String?, snoozedUntil: Double?,
-                         failure: String?, now: Double = Date().timeIntervalSince1970) -> ItemStatus {
+                         failure: String?, heldPrerelease: Bool = false, now: Double = Date().timeIntervalSince1970) -> ItemStatus {
         if failure != nil { return .failed }
         if ignored { return .ignored }
         if item.isOutdated, let skippedVersion, skippedVersion == item.latestVersion { return .skipped }
+        if item.isOutdated, heldPrerelease { return .heldBack }
         if item.isOutdated, let snoozedUntil, snoozedUntil > now { return .snoozed }
         if item.isOutdated { return item.canUpdateDirectly ? .ready : .manualUpdate }
         if item.provider == .vendor, item.latestVersion == nil { return .selfUpdating }
@@ -107,4 +113,16 @@ func abbreviatedPath(_ path: String, home: String = NSHomeDirectory()) -> String
     guard !home.isEmpty, home != "/" else { return path }
     if path == home { return "~" }
     return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+}
+
+/// Helpers for state that system controls write back on their own.
+enum StateWrites {
+    /// Assigns and calls `willChange` only when the value actually changes. Returns whether it changed.
+    @discardableResult
+    static func assignIfChanged<T: Equatable>(_ target: inout T, _ value: T, willChange: () -> Void) -> Bool {
+        guard target != value else { return false }
+        willChange()
+        target = value
+        return true
+    }
 }

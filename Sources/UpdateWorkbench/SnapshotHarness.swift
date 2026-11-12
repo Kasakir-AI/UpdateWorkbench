@@ -10,6 +10,7 @@ enum SnapshotHarness {
         let defaults: [String: Any] = [
             "customRoots": ["/Volumes/Apps"], "interval": 14400.0, "ignored": [String](), "skipped": [String: String](),
             "snoozed": [String: Double](), "notificationsEnabled": true, AppearanceMode.defaultsKey: AppearanceMode.dark.rawValue,
+            CheckSchedule.defaultsKey: CheckSchedule.daily.rawValue,
             SelfUpdateFeed.defaultsKey: "", ProxySettings.defaultsKey: (try? JSONEncoder().encode(ProxySettings())) ?? Data(),
         ]
         UserDefaults.standard.setVolatileDomain(defaults, forName: UserDefaults.argumentDomain)
@@ -28,12 +29,25 @@ enum SnapshotHarness {
             }
             let model = makeModel(.updates)
             let tabs: [(String, AnyView)] = [
-                ("general", AnyView(GeneralSettingsView())), ("appearance", AnyView(AppearanceSettingsView())),
-                ("network", AnyView(ProxySettingsView())), ("updates", AnyView(SelfUpdateSettingsView())),
+                ("general", AnyView(GeneralSettingsView())), ("rules", AnyView(RulesSettingsView())), ("trust", AnyView(TrustSettingsView())),
+                ("appearance", AnyView(AppearanceSettingsView())), ("network", AnyView(ProxySettingsView())), ("updates", AnyView(SelfUpdateSettingsView())),
             ]
             for (name, tab) in tabs {
-                let view = tab.environmentObject(model).tint(Theme.accent).frame(width: 600, height: 500)
-                if let path = render(view, size: CGSize(width: 600, height: 500), dark: dark, name: "settings-\(name)-\(suffix)", folder: folder, toolbar: false) { written.append(path) }
+                let view = tab.environmentObject(model).tint(Theme.accent).frame(width: 640, height: 540)
+                if let path = render(view, size: CGSize(width: 640, height: 540), dark: dark, name: "settings-\(name)-\(suffix)", folder: folder, toolbar: false) { written.append(path) }
+            }
+            // Sheets and the menu bar panel, rendered on their own at their natural width.
+            let aurora = model.items.first { $0.id == "aurora" }!
+            let sheets: [(String, CGSize, AnyView)] = [
+                ("sheet-signer-approval", CGSize(width: 660, height: 790), AnyView(SignerApprovalSheet(change: FakeData.signerChange))),
+                ("sheet-update-notes", CGSize(width: 580, height: 560), AnyView(UpdateConfirmSheet(item: aurora))),
+                ("sheet-license", CGSize(width: 560, height: 480), AnyView(LicenseSheet(prompt: FakeData.license))),
+                ("menubar-panel", CGSize(width: 340, height: 440), AnyView(MenuBarPanel())),
+            ]
+            for (name, size, sheet) in sheets {
+                let view = sheet.environmentObject(model).tint(Theme.accent).frame(width: size.width, height: size.height, alignment: .top)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                if let path = render(view, size: size, dark: dark, name: "\(name)-\(suffix)", folder: folder, toolbar: false) { written.append(path) }
             }
         }
         print(written.joined(separator: "\n"))
@@ -53,6 +67,7 @@ enum SnapshotHarness {
         case noMatches = "no-matches"
         case console
         case permissions
+        case history
     }
 
     static func makeModel(_ scenario: Scenario) -> WorkbenchModel {
@@ -69,6 +84,11 @@ enum SnapshotHarness {
         model.lastCheck = Date().addingTimeInterval(-180)
         model.snoozed = ["canvas": Date().addingTimeInterval(2 * 86400).timeIntervalSince1970]
         model.ignored = ["retro"]
+        model.skipped = ["tidy": "1.0.0"]
+        model.prereleaseRules = ["orbit": .allow, "pixelforge": .hold]
+        model.history = FakeData.history
+        model.approvals = FakeData.approvals
+        model.lastScheduledCheck = Date().addingTimeInterval(-3 * 3600)
         switch scenario {
         case .updates: model.section = .updates
         case .updatesDetail: model.section = .updates; model.selected = "aurora"
@@ -84,6 +104,7 @@ enum SnapshotHarness {
             model.failures = ["pixelforge": "Quit PixelForge before updating it."]
             model.log = "Ready. Check for updates to scan installed applications.\n[10:41:02] Checking installed apps and update sources…\n[10:41:09] Found 14 apps and packages; 7 available updates.\n[10:42:15] Updating PixelForge…\n[10:42:16] PixelForge: Quit PixelForge before updating it."
         case .permissions: model.section = .permissions
+        case .history: model.section = .history; model.selectedHistory = model.history.first?.id
         default: break
         }
         return model
@@ -133,7 +154,49 @@ final class OffscreenWindow: NSWindow {
 
 /// Fictional apps used only for snapshots and screenshots.
 enum FakeData {
-    static let release = SparkleRelease(version: "2.4.0", downloadURL: URL(string: "https://downloads.example.com/aurora-2.4.0.zip")!, releaseNotesURL: URL(string: "https://example.com/aurora/notes")!)
+    static let release: SparkleRelease = {
+        var release = SparkleRelease(version: "2.4.0", downloadURL: URL(string: "https://downloads.example.com/aurora-2.4.0.zip")!, releaseNotesURL: URL(string: "https://example.com/aurora/notes")!)
+        release.notes = ReleaseNotes.sanitize("""
+        <h2>Aurora Notes 2.4</h2><p>A faster editor and <b>offline sync</b> that finally keeps up with large notebooks.</p>
+        <ul><li>New outline sidebar with drag and drop</li><li>Search is up to 3× faster on big libraries</li>
+        <li>Fixed a crash when pasting tables from <a href="https://example.com/aurora/help">spreadsheets</a></li></ul>
+        <hr><p>Thanks to everyone who sent feedback.</p><script>trackInstall()</script>
+        """)
+        return release
+    }()
+
+    static let signerChange = SignerChange(appName: "Orbit Chat", bundleID: "com.example.orbit", version: "1.8.5",
+        installed: SignerIdentity(teamID: "ORBIT12345", authorities: ["Developer ID Application: Orbit Labs, Inc (ORBIT12345)", "Developer ID Certification Authority", "Apple Root CA"],
+                                  identifier: "com.example.orbit", signedTime: "Sep 3, 2026 at 14:12:09", leafSHA256: "3F9A 51C2 77E0 9B14 C8D3 0A6E 52F1 B7C9 4E28 61AD 0C93 FE57 2B8D 14A6 E0C7 59F3",
+                                  leafExpires: Date(timeIntervalSince1970: 1_893_456_000), gatekeeper: "Notarized Developer ID"),
+        candidate: SignerIdentity(teamID: "NEWTEAM678", authorities: ["Developer ID Application: Example Developer (NEWTEAM678)", "Developer ID Certification Authority", "Apple Root CA"],
+                                  identifier: "com.example.orbit", signedTime: "Nov 9, 2026 at 09:41:55", leafSHA256: "A41C 0E77 9D25 6B83 F1C4 27E9 5A0D 8C36 B9F2 1E74 C05A 93D8 6F21 4BE7 0A39 D5C8",
+                                  leafExpires: Date(timeIntervalSince1970: 1_956_528_000), gatekeeper: "Notarized Developer ID"))
+
+    static let license = LicenseAgreementRequired(appName: "Aurora Notes", version: "2.4.0",
+        text: "AURORA NOTES SOFTWARE LICENSE\n\nThis fictional agreement is shown before the disk image is opened. By clicking Agree you accept these terms for the sample app.\n\n1. You may use the software on any Mac you own.\n2. The software is provided as is, without warranty of any kind.")
+
+    static var history: [HistoryEntry] {
+        let now = Date()
+        return [
+            HistoryEntry(date: now.addingTimeInterval(-1_800), itemID: "aurora", appName: "Aurora Notes", bundleID: "com.example.aurora-notes", appPath: "/Applications/Aurora Notes.app",
+                         fromVersion: "2.3.0", toVersion: "2.3.1", source: "Sparkle", result: .installed, message: "Installed 2.3.1. The previous version was removed after the new one passed its checks."),
+            HistoryEntry(date: now.addingTimeInterval(-26 * 3600), itemID: "pixelforge", appName: "PixelForge", bundleID: "com.example.pixelforge", appPath: "/Applications/PixelForge.app",
+                         fromVersion: "5.1.0", toVersion: "5.2.0", source: "Homebrew", result: .failed, message: "Quit PixelForge before updating it."),
+            HistoryEntry(date: now.addingTimeInterval(-3 * 86400), itemID: "orbit", appName: "Orbit Chat", bundleID: "com.example.orbit", appPath: "/Applications/Orbit Chat.app",
+                         fromVersion: "1.8.0", toVersion: "1.8.1", source: "Electron (DMG)", result: .installed, message: "Installed Orbit Chat 1.8.1."),
+            HistoryEntry(date: now.addingTimeInterval(-4 * 86400), itemID: "tidy", appName: "Tidy Terminal", bundleID: "com.example.tidy", appPath: "/Applications/Tidy Terminal.app",
+                         fromVersion: "0.9.3", toVersion: "1.0.0", source: "GitHub", result: .installed, message: "Installed 1.0.0. The previous version was removed after the new one passed its checks."),
+            HistoryEntry(date: now.addingTimeInterval(-9 * 86400), itemID: "harbor", appName: "Harbor VPN", fromVersion: "2.9", toVersion: "3.0", source: "App Store",
+                         result: .installed, message: "Updated through the Mac App Store."),
+        ]
+    }
+
+    static var approvals: [TrustedSignerApproval] {
+        [TrustedSignerApproval(bundleID: "com.example.tidy", appName: "Tidy Terminal", teamID: "TIDYNEW001", signerName: "Tidy Software GmbH",
+                               previousTeamID: "TIDYOLD999", previousSignerName: "Example Developer", certificateSHA256: "5C1E 9A04 77B2 0D6F",
+                               approvedAt: Date().addingTimeInterval(-6 * 86400))]
+    }
     static var items: [UpdateItem] {
         [
             UpdateItem(id: "aurora", name: "Aurora Notes", bundleID: "com.example.aurora-notes", path: "/Applications/Aurora Notes.app", installedVersion: "2.3.1", latestVersion: "2.4.0", provider: .sparkle,

@@ -4,6 +4,14 @@ struct GitHubRelease: Codable, Sendable {
     let version: String
     let releasePageURL: URL
     let downloadURL: URL?
+    /// Sanitized release body (Markdown).
+    var notes: String?
+    var isPrerelease: Bool?
+
+    init(version: String, releasePageURL: URL, downloadURL: URL?, notes: String? = nil, isPrerelease: Bool? = nil) {
+        self.version = version; self.releasePageURL = releasePageURL; self.downloadURL = downloadURL
+        self.notes = notes; self.isPrerelease = isPrerelease
+    }
 }
 
 /// Public, explicitly selected GitHub repositories only; no credentials. Discovered repositories are suggestions the user confirms.
@@ -24,14 +32,19 @@ enum GitHubBackend {
         }
     }
 
-    static func normalizedVersion(_ value: String) -> String? {
+    /// Numeric versions; with `allowPrerelease`, a suffix such as `-beta.1` or `-rc2` is accepted too.
+    static func normalizedVersion(_ value: String, allowPrerelease: Bool = false) -> String? {
         let version = value.hasPrefix("v") || value.hasPrefix("V") ? String(value.dropFirst()) : value
-        guard version.range(of: #"^[0-9]+(?:\.[0-9]+){0,4}$"#, options: .regularExpression) != nil else { return nil }
+        let pattern = allowPrerelease ? #"^[0-9]+(?:\.[0-9]+){0,4}(?:-[0-9A-Za-z][0-9A-Za-z.]{0,30})?$"# : #"^[0-9]+(?:\.[0-9]+){0,4}$"#
+        guard version.range(of: pattern, options: .regularExpression) != nil else { return nil }
         return version
     }
 
-    static func check(repository: String, installedVersion: String) async throws -> GitHubRelease? {
-        try parseRelease(try await fetchLatestReleaseData(repository: repository), repository: repository, installedVersion: installedVersion)
+    static func check(repository: String, installedVersion: String, allowPrerelease: Bool = false) async throws -> GitHubRelease? {
+        if allowPrerelease {
+            return try parseReleaseList(try await fetchReleaseData(repository: repository, list: true), repository: repository, installedVersion: installedVersion)
+        }
+        return try parseRelease(try await fetchLatestReleaseData(repository: repository), repository: repository, installedVersion: installedVersion)
     }
 
     /// Latest public release metadata; also used by Electron GitHub-provider checks.
@@ -39,9 +52,18 @@ enum GitHubBackend {
         try JSONDecoder().decode(APIRelease.self, from: try await fetchLatestReleaseData(repository: repository))
     }
 
+    /// Newest non-draft release including pre-releases (used when pre-releases are allowed for an app).
+    static func fetchNewestRelease(repository: String) async throws -> APIRelease? {
+        try JSONDecoder().decode([APIRelease].self, from: try await fetchReleaseData(repository: repository, list: true)).first { !$0.draft }
+    }
+
     static func fetchLatestReleaseData(repository: String) async throws -> Data {
+        try await fetchReleaseData(repository: repository, list: false)
+    }
+
+    static func fetchReleaseData(repository: String, list: Bool) async throws -> Data {
         guard validRepository(repository) else { throw Failure(message: "Use a GitHub repository in owner/repository form.") }
-        let url = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+        let url = URL(string: "https://api.github.com/repos/\(repository)/releases" + (list ? "?per_page=15" : "/latest"))!
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 30
@@ -69,9 +91,23 @@ enum GitHubBackend {
     static func parseRelease(_ data: Data, repository: String, installedVersion: String,
                              architecture: String = SparkleBackend.hostArchitecture) throws -> GitHubRelease? {
         guard validRepository(repository), data.count <= GitHubResponseGuard.maximumBytes else { throw Failure(message: "Invalid GitHub repository or oversized release metadata.") }
-        let release = try JSONDecoder().decode(APIRelease.self, from: data)
-        guard !release.draft, !release.prerelease else { return nil }
-        guard let version = normalizedVersion(release.tag_name), let installed = normalizedVersion(installedVersion) else {
+        return try evaluate(try JSONDecoder().decode(APIRelease.self, from: data), repository: repository, installedVersion: installedVersion,
+                            architecture: architecture, allowPrerelease: false)
+    }
+
+    /// Newest non-draft entry of a `/releases` list, pre-releases included.
+    static func parseReleaseList(_ data: Data, repository: String, installedVersion: String,
+                                 architecture: String = SparkleBackend.hostArchitecture) throws -> GitHubRelease? {
+        guard validRepository(repository), data.count <= GitHubResponseGuard.maximumBytes else { throw Failure(message: "Invalid GitHub repository or oversized release metadata.") }
+        guard let release = try JSONDecoder().decode([APIRelease].self, from: data).first(where: { !$0.draft }) else { return nil }
+        return try evaluate(release, repository: repository, installedVersion: installedVersion, architecture: architecture, allowPrerelease: true)
+    }
+
+    static func evaluate(_ release: APIRelease, repository: String, installedVersion: String,
+                         architecture: String, allowPrerelease: Bool) throws -> GitHubRelease? {
+        guard !release.draft, allowPrerelease || !release.prerelease else { return nil }
+        guard let version = normalizedVersion(release.tag_name, allowPrerelease: allowPrerelease),
+              let installed = normalizedVersion(installedVersion, allowPrerelease: true) else {
             throw Failure(message: "This repository uses a version format that cannot be compared automatically.")
         }
         guard SparkleBackend.isNewer(version, than: installed) else { return nil }
@@ -100,7 +136,8 @@ enum GitHubBackend {
         let dmgs = candidates.filter { $0.name.lowercased().hasSuffix(".dmg") }
         let chosen = dmgs.count == 1 ? dmgs[0] : (candidates.count == 1 ? candidates[0] : nil)
         let assetURL = chosen.flatMap { URL(string: $0.browser_download_url) }
-        return GitHubRelease(version: version, releasePageURL: page, downloadURL: assetURL)
+        let notes = release.body.map(ReleaseNotes.sanitize).flatMap { $0.isEmpty ? nil : $0 }
+        return GitHubRelease(version: version, releasePageURL: page, downloadURL: assetURL, notes: notes, isPrerelease: release.prerelease)
     }
 
     static func validGitHubURL(_ url: URL, repository: String, pathPrefix: String) -> Bool {
@@ -115,6 +152,7 @@ enum GitHubBackend {
         let draft: Bool
         let prerelease: Bool
         let assets: [Asset]
+        var body: String?
     }
     struct Asset: Decodable, Sendable {
         let name: String

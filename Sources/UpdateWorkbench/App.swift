@@ -14,10 +14,39 @@ final class WorkbenchModel: ObservableObject {
     @Published var sourceFilter = "All sources"
     @Published var lastCheck: Date?
     @Published var operation = "Ready"
-    @Published var ignored: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "ignored") ?? [])
-    @Published var skipped: [String: String] = UserDefaults.standard.dictionary(forKey: "skipped") as? [String: String] ?? [:]
+    @Published var ignored: Set<String> = UpdateRules.load().ignored { didSet { saveRules() } }
+    @Published var skipped: [String: String] = UpdateRules.load().skipped { didSet { saveRules() } }
+    @Published var holdPrereleases: Bool = UpdateRules.load().holdPrereleases { didSet { saveRules() } }
+    @Published var prereleaseRules: [String: PrereleaseRule] = UpdateRules.load().prereleaseRules { didSet { saveRules() } }
     @Published var snoozed: [String: Double] = UserDefaults.standard.dictionary(forKey: "snoozed") as? [String: Double] ?? [:]
-    @Published var interval: Double = UserDefaults.standard.double(forKey: "interval")
+    @Published var schedule: CheckSchedule = CheckSchedule.stored() {
+        didSet { if !isPreview { UserDefaults.standard.set(schedule.rawValue, forKey: CheckSchedule.defaultsKey); self.scheduleChecks() } }
+    }
+    /// Not `@Published`: SwiftUI's MenuBarExtra writes its `isInserted` binding back on every scene update.
+    /// Publishing those same-value writes re-rendered every scene, which wrote the binding again: an endless
+    /// main-thread loop (the 0.4.0 launch hang). Only real changes are published and saved.
+    private var storedShowMenuBarIcon: Bool = UserDefaults.standard.object(forKey: "showMenuBarIcon") as? Bool ?? true
+    var showMenuBarIcon: Bool {
+        get { storedShowMenuBarIcon }
+        set {
+            guard StateWrites.assignIfChanged(&storedShowMenuBarIcon, newValue, willChange: { objectWillChange.send() }) else { return }
+            if !isPreview { UserDefaults.standard.set(newValue, forKey: "showMenuBarIcon") }
+        }
+    }
+    /// Whether the mas command-line tool was found at the last check.
+    @Published var masInstalled = AppStoreCLI.locate() != nil
+    @Published var confirmInstallMas = false
+    @Published var lastScheduledCheck: Date? = UserDefaults.standard.object(forKey: CheckSchedule.lastCheckKey) as? Date
+    @Published var history: [HistoryEntry] = []
+    @Published var selectedHistory: UUID?
+    @Published var approvals: [TrustedSignerApproval] = []
+    /// Item whose update confirmation (with release notes) is showing.
+    @Published var pendingUpdate: UpdateItem?
+    /// Signer change waiting for the user's decision in the approval sheet.
+    @Published var signerChange: SignerChange?
+    @Published var licensePrompt: LicenseAgreementRequired?
+    @Published var notesCache: [String: String] = [:]
+    @Published var notesLoading: Set<String> = []
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var notificationsEnabled = UserDefaults.standard.bool(forKey: "notificationsEnabled")
     @Published var permissions: [PermissionCheck] = []
@@ -35,27 +64,44 @@ final class WorkbenchModel: ObservableObject {
     private var caskSuggestionCache: [String: [CaskSuggestion]] = [:]
     private let engine = Engine()
     private var timer: Timer?
+    private var signerQueue: [SignerChange] = []
+    private var licenseQueue: [LicenseAgreementRequired] = []
+    private var acceptedLicenses: Set<String> = []
+    let historyStore: HistoryStore?
+    let signerStore: TrustedSignerStore?
     init(preview: Bool = false) {
         isPreview = preview
-        if !preview { Notifier.configure(); schedule() }
+        historyStore = preview ? nil : .standard
+        signerStore = preview ? nil : .standard
+        if !preview {
+            history = historyStore?.load() ?? []
+            approvals = signerStore?.load() ?? []
+            Notifier.configure(); scheduleChecks()
+        }
     }
+    var rules: UpdateRules { UpdateRules(ignored: ignored, skipped: skipped, holdPrereleases: holdPrereleases, prereleaseRules: prereleaseRules) }
+    private func saveRules() { if !isPreview { rules.save() } }
+    func decision(_ item: UpdateItem) -> UpdateRules.Decision { rules.decision(id: item.id, latestVersion: item.latestVersion, isOutdated: item.isOutdated) }
+    func isSnoozed(_ item: UpdateItem) -> Bool { (snoozed[item.id] ?? 0) > Date().timeIntervalSince1970 }
     func applyAppearance() { NSApp?.appearance = appearance.nsAppearance }
     var scanned: Bool { lastCheck != nil }
     var directUpdates: [UpdateItem] { updates.filter(\.canUpdateDirectly) }
     func status(_ item: UpdateItem) -> ItemStatus {
-        ItemStatus.classify(item, ignored: ignored.contains(item.id), skippedVersion: skipped[item.id], snoozedUntil: snoozed[item.id], failure: failures[item.id])
+        ItemStatus.classify(item, ignored: ignored.contains(item.id), skippedVersion: skipped[item.id], snoozedUntil: snoozed[item.id],
+                            failure: failures[item.id], heldPrerelease: decision(item) == .heldPrerelease)
     }
     func count(_ section: SidebarSection) -> Int {
         switch section {
         case .updates: updates.count
         case .suggestions: suggestions.count
         case .ignored: ignoredItems.count
+        case .history: history.filter { $0.result == .failed || $0.result == .restoreFailed }.isEmpty ? 0 : history.filter { $0.result == .failed || $0.result == .restoreFailed }.count
         case .packages: items.filter { $0.provider == .homebrewFormula }.count
         case .applications: items.filter { $0.provider != .homebrewFormula }.count
         case .permissions: permissions.filter { $0.state == .denied }.count
         }
     }
-    var ignoredItems: [UpdateItem] { items.filter { ignored.contains($0.id) || (skipped[$0.id] != nil && skipped[$0.id] == $0.latestVersion) || (snoozed[$0.id] ?? 0) > Date().timeIntervalSince1970 } }
+    var ignoredItems: [UpdateItem] { items.filter { decision($0) != .show || isSnoozed($0) } }
     var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? AppIdentity.version }
     var suggestions: [UpdateItem] {
         items.filter { item in
@@ -63,7 +109,10 @@ final class WorkbenchModel: ObservableObject {
                 && (!(item.repositorySuggestions ?? []).isEmpty || !(item.caskSuggestions ?? []).isEmpty)
         }
     }
-    var updates: [UpdateItem] { items.filter { $0.isOutdated && !ignored.contains($0.id) && skipped[$0.id] != $0.latestVersion && (snoozed[$0.id] ?? 0) <= Date().timeIntervalSince1970 } }
+    var updates: [UpdateItem] {
+        let rules = self.rules, now = Date().timeIntervalSince1970
+        return items.filter { $0.isOutdated && rules.decision(id: $0.id, latestVersion: $0.latestVersion, isOutdated: true) == .show && (snoozed[$0.id] ?? 0) <= now }
+    }
     var visible: [UpdateItem] {
         let base: [UpdateItem]
         switch section {
@@ -72,7 +121,7 @@ final class WorkbenchModel: ObservableObject {
         case .ignored: base = ignoredItems
         case .packages: base = items.filter { $0.provider == .homebrewFormula }
         case .applications: base = items.filter { $0.provider != .homebrewFormula }
-        case .permissions: base = []
+        case .permissions, .history: base = []
         }
         return base.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }.filter { (sourceFilter == "All sources" || $0.provider.rawValue == sourceFilter) && (search.isEmpty || "\($0.name) \($0.bundleID ?? "") \($0.provider.rawValue)".localizedCaseInsensitiveContains(search)) }
     }
@@ -83,50 +132,194 @@ final class WorkbenchModel: ObservableObject {
     }
     func scan() {
         guard !busy, !isPreview else { return }; busy = true; operation = "Checking update sources…"; append("Checking installed apps and update sources…")
+        let rules = self.rules
         Task {
-            var scanned = await engine.scan()
+            var scanned = await engine.scan(rules: rules)
             for index in scanned.indices { if let cached = caskSuggestionCache[scanned[index].id] { scanned[index].caskSuggestions = cached } }
             items = scanned; lastCheck = Date()
             for line in await engine.lastDiagnostics() { append(line) }
             append("Found \(items.count) apps and packages; \(updates.count) available updates.")
+            masInstalled = AppStoreCLI.locate() != nil
             busy = false; operation = "Check complete"; failures = failures.filter { id, _ in items.contains { $0.id == id && $0.isOutdated } }
+            lastScheduledCheck = Date(); UserDefaults.standard.set(lastScheduledCheck, forKey: CheckSchedule.lastCheckKey)
+            updateBadge()
             notifyAvailableUpdates()
         }
     }
+    func updateBadge() {
+        guard !isPreview else { return }
+        NSApp?.dockTile.badgeLabel = updates.isEmpty ? nil : "\(updates.count)"
+    }
     func update(_ targets: [UpdateItem]) {
-        guard !busy else { return }; busy = true
+        guard !busy, !isPreview else { return }; busy = true
         Task {
             let actionable = targets.filter(\.canUpdateDirectly)
             var succeeded: [String] = [], failed: [String] = []
             for (index, item) in actionable.enumerated() {
                 operation = "Updating \(index + 1) of \(actionable.count): \(item.name)"
                 append("Updating \(item.name)…")
-                do { append(try await engine.update(item)); succeeded.append(item.name); failures.removeValue(forKey: item.id) }
-                catch { append("\(item.name): \(error.localizedDescription)"); failed.append(item.name); failures[item.id] = error.localizedDescription }
+                var options = InstallOptions()
+                options.trustedSigners = signerStore
+                options.acceptLicense = acceptedLicenses.contains(licenseKey(item))
+                do {
+                    let outcome = try await engine.update(item, options: options)
+                    append(outcome.message); succeeded.append(item.name); failures.removeValue(forKey: item.id)
+                    record(item, result: .installed, message: outcome.message, toVersion: outcome.installedVersion)
+                    markInstalled(item, version: outcome.installedVersion)
+                } catch let change as SignerChange {
+                    append("\(item.name): \(change.localizedDescription)"); failed.append(item.name)
+                    failures[item.id] = "Signed by a new developer team. Review it to continue."
+                    record(item, result: .failed, message: change.localizedDescription)
+                    signerQueue.append(change)
+                } catch let license as LicenseAgreementRequired {
+                    append("\(item.name): \(license.localizedDescription)")
+                    failures[item.id] = "Waiting for the disk image's license agreement."
+                    licenseQueue.append(license); failed.append(item.name)
+                } catch {
+                    append("\(item.name): \(error.localizedDescription)"); failed.append(item.name); failures[item.id] = error.localizedDescription
+                    record(item, result: .failed, message: error.localizedDescription)
+                }
             }
             if notificationsEnabled, let message = UpdateNotificationPolicy.resultMessage(succeeded: succeeded, failed: failed) {
                 Notifier.post(title: message.title, body: message.body, identifier: "result-\(UUID().uuidString)")
             }
-            busy = false; operation = failed.isEmpty ? "Updates finished" : "\(failed.count) update(s) failed. See Console."; if !failed.isEmpty { showConsole = true }; scan()
+            busy = false; operation = failed.isEmpty ? "Updates finished" : "\(failed.count) update(s) need attention. See Console."
+            if !failed.isEmpty && signerQueue.isEmpty && licenseQueue.isEmpty { showConsole = true }
+            presentNextPrompt()
+            scan()
         }
     }
+    private func licenseKey(_ item: UpdateItem) -> String { "\(item.id)|\(item.latestVersion ?? "")" }
+    private func presentNextPrompt() {
+        guard signerChange == nil, licensePrompt == nil else { return }
+        if !licenseQueue.isEmpty { licensePrompt = licenseQueue.removeFirst() }
+        else if !signerQueue.isEmpty { signerChange = signerQueue.removeFirst() }
+    }
+    /// Removes a just-installed update from the list right away instead of waiting for the next check.
+    private func markInstalled(_ item: UpdateItem, version: String?) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[index].installedVersion = version ?? item.latestVersion ?? item.installedVersion
+        items[index].isOutdated = false
+        updateBadge()
+    }
+    private func record(_ item: UpdateItem, result: HistoryEntry.Result, message: String, toVersion: String? = nil) {
+        let entry = HistoryEntry(date: Date(), itemID: item.id, appName: item.name, bundleID: item.bundleID, appPath: item.path,
+                                 fromVersion: item.installedVersion, toVersion: toVersion ?? item.latestVersion ?? "?",
+                                 source: item.provider.rawValue, result: result, message: String(message.prefix(4000)))
+        history.insert(entry, at: 0)
+        if let historyStore { do { try historyStore.save(history) } catch { append("History: \(error.localizedDescription)") } }
+    }
+    /// The user approved the new signer in the confirmation sheet: store it for this app and retry the update.
+    func approveSigner(_ change: SignerChange) {
+        signerChange = nil
+        guard let signerStore else { presentNextPrompt(); return }
+        do {
+            try signerStore.approve(change)
+            approvals = signerStore.load()
+            append("Approved team \(change.candidate.teamID) (\(change.candidate.signerName)) for \(change.appName). Revoke it in Settings → Trust.")
+            if let item = items.first(where: { $0.bundleID == change.bundleID && $0.canUpdateDirectly }) { update([item]) }
+        } catch { append("Could not save the approval: \(error.localizedDescription)") }
+        presentNextPrompt()
+    }
+    func declineSigner(_ change: SignerChange) {
+        signerChange = nil
+        append("Kept \(change.appName) as installed. The update signed by \(change.candidate.signerName) (\(change.candidate.teamID)) was not approved.")
+        presentNextPrompt()
+    }
+    func revokeApproval(_ approval: TrustedSignerApproval) {
+        guard let signerStore else { approvals.removeAll { $0.id == approval.id }; return }
+        do { try signerStore.revoke(approval.id); approvals = signerStore.load(); append("Revoked team \(approval.teamID) for \(approval.appName).") }
+        catch { append(error.localizedDescription) }
+    }
+    func acceptLicense(_ prompt: LicenseAgreementRequired) {
+        licensePrompt = nil
+        if let item = items.first(where: { $0.name == prompt.appName && $0.latestVersion == prompt.version }) {
+            acceptedLicenses.insert(licenseKey(item)); failures.removeValue(forKey: item.id)
+            append("Accepted the license agreement of \(prompt.appName) \(prompt.version).")
+            update([item])
+        }
+        presentNextPrompt()
+    }
+    func declineLicense(_ prompt: LicenseAgreementRequired) {
+        licensePrompt = nil
+        append("Declined the license agreement of \(prompt.appName) \(prompt.version); nothing was installed.")
+        presentNextPrompt()
+    }
+    /// Installs mas with Homebrew after the user confirmed `brew install mas`.
+    func installMas() {
+        guard !busy, !isPreview else { return }; busy = true; operation = "Installing mas…"
+        append("Installing mas with Homebrew (brew install mas)…")
+        Task {
+            do { append(try await engine.installMas()) } catch { append("mas: \(error.localizedDescription)"); showConsole = true }
+            masInstalled = AppStoreCLI.locate() != nil
+            busy = false; operation = masInstalled ? "mas installed" : "mas wasn't installed"
+            if masInstalled { scan() }
+        }
+    }
+    /// Opens Terminal with `mas update <id>`, where macOS can ask for the administrator password mas needs.
+    func finishInTerminal(_ item: UpdateItem) {
+        guard !isPreview, let mas = AppStoreCLI.locate(), let id = item.token,
+              let script = AppStoreCLI.terminalScript(mas: mas, adamID: id, name: item.name) else {
+            append("\(item.name): mas or the App Store ID is unavailable."); return
+        }
+        do {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("UpdateWorkbench-mas-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let file = folder.appendingPathComponent("mas-update-\(id).command")
+            try Data(script.utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+            let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+            NSWorkspace.shared.open([file], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
+            append("Opened Terminal to run mas update \(id) for \(item.name). Check for updates again when it finishes.")
+        } catch { append("\(item.name): \(error.localizedDescription)") }
+    }
+    func loadNotes(_ item: UpdateItem) {
+        guard !isPreview, item.releaseNotes == nil, let url = item.releaseNotesLink, notesCache[url.absoluteString] == nil,
+              !notesLoading.contains(url.absoluteString) else { return }
+        notesLoading.insert(url.absoluteString)
+        Task {
+            do { notesCache[url.absoluteString] = try await ReleaseNotes.fetch(url) }
+            catch { notesCache[url.absoluteString] = "Release notes couldn't be loaded: \(error.localizedDescription)" }
+            notesLoading.remove(url.absoluteString)
+        }
+    }
+    func notes(for item: UpdateItem) -> String? {
+        item.releaseNotes ?? item.releaseNotesLink.flatMap { notesCache[$0.absoluteString] }
+    }
+    func setPrereleaseRule(_ rule: PrereleaseRule, for id: String) {
+        if rule == .followGlobal { prereleaseRules.removeValue(forKey: id) } else { prereleaseRules[id] = rule }
+    }
+    func removeRules(for id: String) {
+        ignored.remove(id); skipped.removeValue(forKey: id); prereleaseRules.removeValue(forKey: id)
+        snoozed.removeValue(forKey: id); UserDefaults.standard.set(snoozed, forKey: "snoozed")
+    }
+    func ruleName(_ id: String) -> String { items.first { $0.id == id }?.name ?? UpdateRules.displayName(for: id) }
     func ignore(_ item: UpdateItem) {
         if ignored.contains(item.id) { ignored.remove(item.id) } else { ignored.insert(item.id) }
-        UserDefaults.standard.set(Array(ignored), forKey: "ignored")
     }
     func skip(_ item: UpdateItem) {
         if skipped[item.id] == item.latestVersion { skipped.removeValue(forKey: item.id) }
         else { skipped[item.id] = item.latestVersion }
-        UserDefaults.standard.set(skipped, forKey: "skipped")
     }
     func snooze(_ item: UpdateItem, days: Int) {
         if days == 0 { snoozed.removeValue(forKey: item.id) }
         else { snoozed[item.id] = Date().addingTimeInterval(Double(days) * 86400).timeIntervalSince1970 }
         UserDefaults.standard.set(snoozed, forKey: "snoozed")
     }
-    func schedule() {
-        timer?.invalidate(); UserDefaults.standard.set(interval, forKey: "interval")
-        if interval > 0 { timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in Task { @MainActor in self?.scan() } } }
+    /// Background checks: a 30-minute timer asks whether a daily or weekly check is due. Checks never install anything.
+    func scheduleChecks() {
+        timer?.invalidate(); timer = nil
+        guard !isPreview, schedule != .off else { return }
+        let timer = Timer(timeInterval: 1800, repeats: true) { [weak self] _ in Task { @MainActor in self?.runScheduledCheckIfDue() } }
+        timer.tolerance = 300
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        Task { try? await Task.sleep(for: .seconds(8)); runScheduledCheckIfDue() }
+    }
+    func runScheduledCheckIfDue() {
+        guard !busy, schedule.isDue(lastCheck: lastScheduledCheck) else { return }
+        append("Scheduled \(schedule.rawValue.lowercased()) check (looks for updates only; nothing installs automatically).")
+        scan()
     }
     func setLogin(_ enabled: Bool) {
         do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = enabled }
@@ -257,7 +450,8 @@ final class WorkbenchModel: ObservableObject {
         busy = true; selfUpdateMessage = "Installing \(release.version)…"
         Task {
             do {
-                let message = try await SparkleBackend.install(release: release, target: Bundle.main.bundleURL, replacingRunningSelf: true)
+                var options = InstallOptions(); options.trustedSigners = nil
+                let message = try await SparkleBackend.install(release: release, target: Bundle.main.bundleURL, replacingRunningSelf: true, options: options).message
                 append(message); selfUpdateMessage = message; selfUpdateInstalled = true
             } catch { selfUpdateMessage = error.localizedDescription; append("Self-update: \(error.localizedDescription)") }
             busy = false
@@ -309,9 +503,14 @@ struct UpdateWorkbenchApp: App {
                 .preferredColorScheme(model.appearance.colorScheme)
                 .tint(Theme.accent)
         }
-        MenuBarExtra("Update Workbench", systemImage: "arrow.triangle.2.circlepath") {
-            WorkbenchMenu().environmentObject(model)
+        MenuBarExtra(isInserted: Binding(get: { model.showMenuBarIcon }, set: { model.showMenuBarIcon = $0 })) {
+            MenuBarPanel().environmentObject(model)
+                .preferredColorScheme(model.appearance.colorScheme)
+                .tint(Theme.accent)
+        } label: {
+            MenuBarLabel(count: model.updates.count)
         }
+        .menuBarExtraStyle(.window)
     }
 }
 
@@ -337,18 +536,8 @@ struct WorkbenchCommands: Commands {
             Button("Find Homebrew Matches") { model.section = .suggestions; model.findHomebrewMatches() }.disabled(model.busy || model.items.isEmpty)
             Button("Refresh Catalog") { model.refreshCatalog() }.disabled(model.busy)
             Button("Diagnose Homebrew") { model.showConsole = true; model.maintain("doctor") }.disabled(model.busy)
+            Divider()
+            Button(model.masInstalled ? "mas Is Installed" : "Install mas…") { model.confirmInstallMas = true }.disabled(model.busy || model.masInstalled)
         }
-    }
-}
-
-struct WorkbenchMenu: View {
-    @EnvironmentObject var model: WorkbenchModel
-    @Environment(\.openWindow) private var openWindow
-    var body: some View {
-        Text(HeroSummary.title(updates: model.updates.count, scanned: model.scanned))
-        Button("Check for Updates") { model.scan() }.disabled(model.busy)
-        Button("Open Update Workbench") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
-        Divider()
-        Button("Quit") { NSApp.terminate(nil) }
     }
 }

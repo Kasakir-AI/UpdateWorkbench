@@ -8,6 +8,12 @@ mkdir -p "$test_work_dir/module-cache"
 backend_sources="Sources/UpdateWorkbench/Core.swift
 Sources/UpdateWorkbench/SparkleBackend.swift
 Sources/UpdateWorkbench/ArchiveSafety.swift
+Sources/UpdateWorkbench/DiskImage.swift
+Sources/UpdateWorkbench/TrustedSigners.swift
+Sources/UpdateWorkbench/UpdateHistory.swift
+Sources/UpdateWorkbench/Rules.swift
+Sources/UpdateWorkbench/ReleaseNotes.swift
+Sources/UpdateWorkbench/AppStoreCLI.swift
 Sources/UpdateWorkbench/GitHubBackend.swift
 Sources/UpdateWorkbench/SecurityBackend.swift
 Sources/UpdateWorkbench/NetworkSettings.swift
@@ -24,6 +30,8 @@ xcrun swiftc -swift-version 6 -parse-as-library \
   Tests/BackendTests.swift \
   Tests/PresentationTests.swift \
   Tests/ArchiveSafetyTests.swift \
+  Tests/WorkflowTests.swift \
+  Tests/DiskImageTests.swift \
   -o "$test_work_dir/backend-tests"
 "$test_work_dir/backend-tests"
 

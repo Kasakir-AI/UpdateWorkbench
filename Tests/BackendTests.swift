@@ -17,6 +17,8 @@ struct BackendTests {
         try await FeatureTests.run()
         try PresentationTests.run()
         try ArchiveSafetyTests.run()
+        try WorkflowTests.run()
+        try await DiskImageTests.run()
         try testHomebrewDestination()
         try testAppcasts()
         try testSignatures()

@@ -6,28 +6,37 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettingsView().tabItem { Label("General", systemImage: "gearshape") }
+            RulesSettingsView().tabItem { Label("Rules", systemImage: "line.3.horizontal.decrease.circle") }
+            TrustSettingsView().tabItem { Label("Trust", systemImage: "checkmark.shield") }
             AppearanceSettingsView().tabItem { Label("Appearance", systemImage: "paintpalette") }
             ProxySettingsView().tabItem { Label("Network", systemImage: "network") }
             SelfUpdateSettingsView().tabItem { Label("Updates", systemImage: "arrow.down.app") }
         }
-        .frame(width: 600, height: 500)
+        .frame(width: 640, height: 540)
     }
 }
 
 struct GeneralSettingsView: View {
     @EnvironmentObject var model: WorkbenchModel
     @State private var customRoots = (UserDefaults.standard.stringArray(forKey: "customRoots") ?? []).joined(separator: "\n")
-    @State private var confirmClear = false
     var body: some View {
         Form {
             Section {
-                Picker("Check automatically", selection: $model.interval) {
-                    Text("Manually").tag(0.0); Text("Hourly").tag(3600.0); Text("Every 4 hours").tag(14400.0); Text("Daily").tag(86400.0)
-                }.onChange(of: model.interval) { model.schedule() }
+                Picker("Check for updates", selection: $model.schedule) {
+                    ForEach(CheckSchedule.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Toggle("Notify me about new updates and results", isOn: Binding(get: { model.notificationsEnabled }, set: { model.setNotifications($0) }))
+                Toggle("Show Update Workbench in the menu bar", isOn: $model.showMenuBarIcon)
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLogin($0) }))
-                Toggle("Notify about new updates and update results", isOn: Binding(get: { model.notificationsEnabled }, set: { model.setNotifications($0) }))
-            } header: { Text("Checking") } footer: {
-                Text("Scheduled checks run while Update Workbench is open. Each available version is announced once. Installation always needs an explicit Update.").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+            } header: { Text("Background checks") } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let next = model.schedule.nextCheck(after: model.lastScheduledCheck) {
+                        Label("Next check \(next <= Date() ? "within a few minutes" : next.formatted(date: .abbreviated, time: .shortened))", systemImage: "clock").foregroundStyle(Theme.accent)
+                    }
+                    Text("Checks only look for updates and run while Update Workbench is open (it keeps running in the menu bar). Nothing is installed automatically: every update waits for your confirmation.")
+                }
+                .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
             Section {
                 TextEditor(text: $customRoots).frame(height: 64).font(.system(.callout, design: .monospaced))
@@ -37,25 +46,137 @@ struct GeneralSettingsView: View {
                     UserDefaults.standard.set(paths, forKey: "customRoots"); model.scan()
                 } }
             } header: { Text("Additional application folders") } footer: {
-                Text("One absolute path per line. /Applications and ~/Applications are always included.").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
-            }
-            Section {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Ignored apps, skipped versions and snoozes")
-                        Text("\(model.ignored.count) ignored · \(model.skipped.count) skipped · \(model.snoozed.count) snoozed").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Reset…") { confirmClear = true }.disabled(model.ignored.isEmpty && model.skipped.isEmpty && model.snoozed.isEmpty)
-                }
-            } header: { Text("Hidden updates") } footer: {
-                Text("Sources: Homebrew casks and formulae, optional mas CLI, Sparkle feeds, declared Electron update feeds and GitHub repositories you choose. Apps with vendor updaters open their own updater.").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+                Text("One absolute path per line. /Applications and ~/Applications are always included. Sources: Homebrew casks and formulae, optional mas CLI, Sparkle feeds, declared Electron update feeds and GitHub repositories you choose.").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
         }
         .formStyle(.grouped)
-        .confirmationDialog("Show all ignored, skipped and snoozed updates again?", isPresented: $confirmClear) {
-            Button("Reset") { model.ignored = []; model.skipped = [:]; model.snoozed = [:]; for key in ["ignored", "skipped", "snoozed"] { UserDefaults.standard.removeObject(forKey: key) } }
+    }
+}
+
+struct RulesSettingsView: View {
+    @EnvironmentObject var model: WorkbenchModel
+    @State private var confirmReset = false
+    @State private var newRuleApp = ""
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Hold back pre-releases and betas", isOn: $model.holdPrereleases)
+            } header: { Text("Pre-releases") } footer: {
+                Text("Recommended. Versions like 2.0-beta.1, 3.1b2, 4.0rc1, alpha, preview or nightly are hidden unless an app has its own rule below. Allowing betas also lets Sparkle beta channels and GitHub pre-releases through.")
+                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+            }
+            Section {
+                let ids = Array(Set(model.rules.ruleIDs).union(model.snoozed.filter { $0.value > Date().timeIntervalSince1970 }.keys)).sorted { model.ruleName($0).localizedCaseInsensitiveCompare(model.ruleName($1)) == .orderedAscending }
+                if ids.isEmpty {
+                    Text("No app rules yet. Use Later in an app's details, or add one below.").foregroundStyle(.secondary)
+                }
+                ForEach(ids, id: \.self) { id in RuleRow(id: id) }
+                HStack {
+                    Picker("Add a rule for", selection: $newRuleApp) {
+                        Text("Choose an app…").tag("")
+                        ForEach(model.items.filter { !ids.contains($0.id) }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) { Text($0.name).tag($0.id) }
+                    }
+                    Menu("Add") {
+                        Button("Ignore App") { model.ignored.insert(newRuleApp); newRuleApp = "" }
+                        if let item = model.items.first(where: { $0.id == newRuleApp }), item.isOutdated, let latest = item.latestVersion {
+                            Button("Skip Version \(latest)") { model.skipped[newRuleApp] = latest; newRuleApp = "" }
+                        }
+                        Button("Allow Betas") { model.setPrereleaseRule(.allow, for: newRuleApp); newRuleApp = "" }
+                        Button("Always Hold Back Betas") { model.setPrereleaseRule(.hold, for: newRuleApp); newRuleApp = "" }
+                    }
+                    .fixedSize().disabled(newRuleApp.isEmpty)
+                }
+            } header: { Text("App rules") } footer: {
+                HStack {
+                    Text("Skipped versions come back automatically when a newer version is released.").foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Reset All…", role: .destructive) { confirmReset = true }.disabled(model.rules.ruleIDs.isEmpty && model.snoozed.isEmpty)
+                }
+            }
         }
+        .formStyle(.grouped)
+        .confirmationDialog("Remove every ignore, skip, snooze and beta rule?", isPresented: $confirmReset) {
+            Button("Reset Rules", role: .destructive) {
+                model.ignored = []; model.skipped = [:]; model.prereleaseRules = [:]; model.snoozed = [:]
+                UserDefaults.standard.removeObject(forKey: "snoozed")
+            }
+        } message: { Text("The global pre-release setting is kept.") }
+    }
+}
+
+struct RuleRow: View {
+    let id: String
+    @EnvironmentObject var model: WorkbenchModel
+    var body: some View {
+        HStack(spacing: 10) {
+            if let item = model.items.first(where: { $0.id == id }) { AppIconView(item: item, size: 26) }
+            else { Image(systemName: "app.dashed").font(.title3).foregroundStyle(.secondary).frame(width: 26) }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.ruleName(id)).font(.callout.weight(.semibold)).lineLimit(1)
+                HStack(spacing: 6) {
+                    if model.ignored.contains(id) { Pill(text: "Ignored", symbol: "eye.slash.fill", tint: .gray) }
+                    if let version = model.skipped[id] { Pill(text: "Skipping \(version)", symbol: "forward.end.fill", tint: Theme.indigo) }
+                    if let rule = model.prereleaseRules[id], rule != .followGlobal {
+                        Pill(text: rule == .allow ? "Betas allowed" : "Betas held", symbol: "flask.fill", tint: rule == .allow ? Theme.mint : .orange)
+                    }
+                    if let until = model.snoozed[id], until > Date().timeIntervalSince1970 {
+                        Pill(text: "Snoozed to \(Date(timeIntervalSince1970: until).formatted(date: .abbreviated, time: .omitted))", symbol: "moon.zzz.fill", tint: .purple)
+                    }
+                }
+            }
+            Spacer()
+            Menu {
+                Button(model.ignored.contains(id) ? "Stop Ignoring" : "Ignore App") { if model.ignored.contains(id) { model.ignored.remove(id) } else { model.ignored.insert(id) } }
+                if model.skipped[id] != nil { Button("Stop Skipping \(model.skipped[id] ?? "")") { model.skipped.removeValue(forKey: id) } }
+                Divider()
+                Picker("Betas", selection: Binding(get: { model.prereleaseRules[id] ?? .followGlobal }, set: { model.setPrereleaseRule($0, for: id) })) {
+                    ForEach(PrereleaseRule.allCases) { Text($0.rawValue).tag($0) }
+                }
+            } label: { Image(systemName: "slider.horizontal.3") }
+                .menuStyle(.borderlessButton).fixedSize().help("Change this app's rules")
+            Button(role: .destructive) { model.removeRules(for: id) } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless).help("Remove all rules for this app").accessibilityLabel("Remove rules for \(model.ruleName(id))")
+        }
+    }
+}
+
+struct TrustSettingsView: View {
+    @EnvironmentObject var model: WorkbenchModel
+    @State private var pendingRevoke: TrustedSignerApproval?
+    var body: some View {
+        Form {
+            Section {
+                if model.approvals.isEmpty {
+                    Label("No signer changes approved. If an update is signed by a different developer team, Update Workbench stops and asks you.", systemImage: "checkmark.shield")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(model.approvals) { approval in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "person.badge.shield.checkmark.fill").font(.title3).foregroundStyle(.orange).frame(width: 26)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(approval.appName).font(.callout.weight(.semibold))
+                            Text("\(approval.previousSignerName) (\(approval.previousTeamID)) → \(approval.signerName) (\(approval.teamID))").font(.caption).textSelection(.enabled)
+                            Text("\(approval.bundleID) · approved \(approval.approvedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Revoke…", role: .destructive) { pendingRevoke = approval }
+                    }
+                }
+            } header: { Text("Approved signer changes") } footer: {
+                Text("Each approval covers one app and one new Developer ID team. Code signing and Gatekeeper are still required. Revoking means the next update from that team asks again.")
+                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+            }
+            Section {
+                Label("No copies of previous versions are kept", systemImage: "trash.slash")
+            } header: { Text("Previous versions") } footer: {
+                Text("Direct installs stage the new app in a private temporary folder, swap it in, verify it, and only then delete the previous version. If anything fails, the previous version is put back. Nothing is left beside your apps.")
+                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+            }
+        }
+        .formStyle(.grouped)
+        .confirmationDialog("Revoke the approval for \(pendingRevoke?.appName ?? "")?", isPresented: Binding(get: { pendingRevoke != nil }, set: { if !$0 { pendingRevoke = nil } })) {
+            Button("Revoke", role: .destructive) { if let approval = pendingRevoke { model.revokeApproval(approval) }; pendingRevoke = nil }
+        } message: { Text("Updates signed by team \(pendingRevoke?.teamID ?? "") will need your approval again.") }
     }
 }
 
@@ -217,7 +338,7 @@ struct SelfUpdateSettingsView: View {
         .formStyle(.grouped)
         .confirmationDialog("Install Update Workbench \(model.selfUpdateRelease?.version ?? "")?", isPresented: $confirmInstall) {
             Button("Install") { model.installSelfUpdate() }
-        } message: { Text("The current copy is kept as a hidden backup beside the app. Relaunch afterwards to use the new version.") }
+        } message: { Text("The new version replaces this copy after it passes the checks; the old copy is deleted. Relaunch afterwards to use the new version.") }
     }
 }
 

@@ -51,6 +51,7 @@ enum ElectronBackend {
         var files: [MetadataFile]
         var path: String?
         var sha512: String?
+        var releaseNotes: String?
     }
 
     static let updateConfigPath = "Contents/Resources/app-update.yml"
@@ -185,7 +186,56 @@ enum ElectronBackend {
         }
         files.removeAll { $0.url.isEmpty }
         if files.isEmpty, let path = scalars["path"] { files = [MetadataFile(url: path, sha512: scalars["sha512"], size: nil)] }
-        return Metadata(version: version, files: files, path: scalars["path"], sha512: scalars["sha512"])
+        let notes = releaseNotesValue(text).map(ReleaseNotes.sanitize).flatMap { $0.isEmpty ? nil : $0 }
+        return Metadata(version: version, files: files, path: scalars["path"], sha512: scalars["sha512"], releaseNotes: notes)
+    }
+
+    /// `releaseNotes:` as a quoted or plain scalar, a `|`/`>` block, or a list of `note:` entries.
+    static func releaseNotesValue(_ text: String) -> String? {
+        let lines = text.components(separatedBy: .newlines)
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("releaseNotes:") }) else { return nil }
+        let inline = String(lines[start].dropFirst("releaseNotes:".count)).trimmingCharacters(in: .whitespaces)
+        var block: [String] = []
+        for line in lines[(start + 1)...] {
+            if let first = line.first, first != " ", first != "\t" { break }
+            block.append(line)
+        }
+        if inline.hasPrefix("|") || inline.hasPrefix(">") || (inline.isEmpty && !block.isEmpty) {
+            let indent = block.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                .map { $0.prefix { $0 == " " || $0 == "\t" }.count }.min() ?? 0
+            let body = block.map { String($0.dropFirst(min(indent, $0.count))) }
+            if inline.isEmpty, body.first?.hasPrefix("- ") == true {
+                // electron-builder `releaseNotes` list: entries with `version:` and `note:`.
+                let notes = body.compactMap { line -> String? in
+                    let trimmed = line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "- ", with: "", options: .anchored)
+                    guard trimmed.hasPrefix("note:") else { return nil }
+                    return yamlScalar(String(trimmed.dropFirst("note:".count)))
+                }
+                return notes.isEmpty ? nil : notes.joined(separator: "\n\n")
+            }
+            return inline.hasPrefix(">") ? body.joined(separator: " ") : body.joined(separator: "\n")
+        }
+        guard !inline.isEmpty else { return nil }
+        return yamlScalar(inline)
+    }
+
+    /// A single-line YAML scalar: single quotes ('' escapes), double quotes (\n, \", \\ escapes) or plain.
+    static func yamlScalar(_ raw: String) -> String {
+        let value = raw.trimmingCharacters(in: .whitespaces)
+        if value.count >= 2, value.hasPrefix("'"), value.hasSuffix("'") {
+            return String(value.dropFirst().dropLast()).replacingOccurrences(of: "''", with: "'")
+        }
+        if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
+            var output = "", escaping = false
+            for character in value.dropFirst().dropLast() {
+                if escaping {
+                    switch character { case "n": output.append("\n"); case "t": output.append("\t"); default: output.append(character) }
+                    escaping = false
+                } else if character == "\\" { escaping = true } else { output.append(character) }
+            }
+            return output
+        }
+        return value
     }
 
     static func normalized(_ version: String) -> String {
@@ -195,10 +245,10 @@ enum ElectronBackend {
     /// Picks one native DMG (preferred: a disk image carries the app exactly as signed) or, failing that, one native ZIP.
     /// Ambiguity disables direct installation.
     static func select(_ metadata: Metadata, baseURL: URL, installedVersion: String,
-                       architecture: String = SparkleBackend.hostArchitecture,
+                       architecture: String = SparkleBackend.hostArchitecture, allowPrerelease: Bool = false,
                        allowURL: (URL) -> Bool = HTTPFetcher.isSafeHTTPS) -> ElectronCheckResult? {
         let version = normalized(metadata.version), installed = normalized(installedVersion)
-        if version.contains("-") && !installed.contains("-") { return nil }
+        if version.contains("-") && !installed.contains("-") && !allowPrerelease { return nil }
         guard SparkleBackend.isNewer(version, than: installed) else { return nil }
         struct Candidate { let url: URL; let sha512: String?; let name: String; let ext: String }
         let candidates: [Candidate] = metadata.files.compactMap { file in
@@ -223,16 +273,17 @@ enum ElectronBackend {
             return ElectronCheckResult(version: version, release: nil, releasePage: nil,
                                        note: "Electron update \(version) is available, but its metadata has no SHA-512 checksum, so direct installation is disabled.")
         }
-        return ElectronCheckResult(version: version, release: SparkleRelease(version: version, downloadURL: chosen.url, releaseNotesURL: nil, sha512: sha512),
+        return ElectronCheckResult(version: version, release: SparkleRelease(version: version, downloadURL: chosen.url, releaseNotesURL: nil, sha512: sha512, notes: metadata.releaseNotes),
                                    releasePage: nil, note: "Electron update available from the app's declared update feed. Installation verifies SHA-512, bundle identity, signing team, Gatekeeper, version and native CPU.")
     }
 
-    static func check(config: ElectronUpdateConfig, installedVersion: String) async throws -> ElectronCheckResult? {
+    static func check(config: ElectronUpdateConfig, installedVersion: String, allowPrerelease: Bool = false) async throws -> ElectronCheckResult? {
         switch config.provider {
         case .github:
             guard let repository = config.repository else { throw Failure(message: "Invalid GitHub update configuration.") }
-            let release = try await GitHubBackend.fetchLatestRelease(repository: repository)
-            guard !release.draft, !release.prerelease else { return nil }
+            let fetched = allowPrerelease ? try await GitHubBackend.fetchNewestRelease(repository: repository)
+                                          : try await GitHubBackend.fetchLatestRelease(repository: repository)
+            guard let release = fetched, !release.draft, allowPrerelease || !release.prerelease else { return nil }
             guard let asset = release.assets.first(where: { $0.name == config.metadataFileName }),
                   let metadataURL = URL(string: asset.browser_download_url),
                   GitHubBackend.validGitHubURL(metadataURL, repository: repository, pathPrefix: "releases/download/") else {
@@ -242,7 +293,7 @@ enum ElectronBackend {
             guard response.statusCode == 200 else { throw Failure(message: "Electron update metadata returned HTTP \(response.statusCode).") }
             let metadata = try parseMetadata(String(decoding: data, as: UTF8.self))
             let base = metadataURL.deletingLastPathComponent()
-            let result = select(metadata, baseURL: base, installedVersion: installedVersion) {
+            let result = select(metadata, baseURL: base, installedVersion: installedVersion, allowPrerelease: allowPrerelease) {
                 GitHubBackend.validGitHubURL($0, repository: repository, pathPrefix: "releases/download/")
             }
             let page = URL(string: release.html_url).flatMap { GitHubBackend.validGitHubURL($0, repository: repository, pathPrefix: "releases/tag/") ? $0 : nil }
@@ -251,7 +302,8 @@ enum ElectronBackend {
             guard let url = metadataURL(for: config) else { throw Failure(message: "The Electron update feed URL could not be derived.") }
             let (data, response) = try await HTTPFetcher.fetch(url, maximumBytes: 1_048_576)
             guard response.statusCode == 200 else { throw Failure(message: "Electron update metadata returned HTTP \(response.statusCode).") }
-            return select(try parseMetadata(String(decoding: data, as: UTF8.self)), baseURL: url.deletingLastPathComponent(), installedVersion: installedVersion)
+            return select(try parseMetadata(String(decoding: data, as: UTF8.self)), baseURL: url.deletingLastPathComponent(),
+                          installedVersion: installedVersion, allowPrerelease: allowPrerelease)
         }
     }
 }

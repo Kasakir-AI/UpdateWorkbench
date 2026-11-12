@@ -66,8 +66,19 @@ struct UpdateItem: Identifiable, Codable, Sendable, Hashable {
         }
     }
 
+    /// Sanitized notes for the available version, from the feed or the GitHub release body.
+    var releaseNotes: String? { isOutdated ? (sparkleRelease?.notes ?? githubRelease?.notes) : nil }
+    /// HTTPS notes page (Sparkle `releaseNotesLink`) that can be fetched on demand.
+    var releaseNotesLink: URL? { isOutdated ? sparkleRelease?.releaseNotesURL : nil }
+
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+/// Result of one update attempt, used for the history log.
+struct UpdateOutcome: Sendable {
+    let message: String
+    var installedVersion: String? = nil
 }
 
 struct CommandResult: Sendable {
@@ -186,11 +197,11 @@ enum CommandRunner {
 actor Engine {
     private var diagnostics: [String] = []
     private let brewPath: String?
-    private let masPath: String?
+    /// Looked up on every use so mas installed while the app runs is picked up.
+    private var masPath: String? { AppStoreCLI.locate() }
 
     init() {
         brewPath = Self.executable(["/opt/homebrew/bin/brew", "/usr/local/bin/brew"])
-        masPath = Self.executable(["/opt/homebrew/bin/mas", "/usr/local/bin/mas"])
     }
 
     func lastDiagnostics() -> [String] { diagnostics }
@@ -217,29 +228,36 @@ actor Engine {
         return try await execute(brewPath, ["install", "--cask", "--adopt", token])
     }
 
-    func scan() async -> [UpdateItem] {
+    func scan(rules: UpdateRules = UpdateRules()) async -> [UpdateItem] {
         diagnostics = []
+        // mas looks each app up online and can take a while, so it runs alongside the Homebrew check.
+        let masTask: Task<CommandResult, Error>? = masPath.map { mas in Task { try await CommandRunner.run(mas, ["outdated", "--json"], timeout: 120) } }
         var items = Self.installedApps()
         if let brewPath {
             do { try await mergeHomebrew(executable: brewPath, items: &items) }
             catch { diagnostics.append("Homebrew: \(error.localizedDescription)") }
         } else { diagnostics.append("Homebrew is not installed. Homebrew updates are unavailable.") }
-        if let masPath {
-            do { try await mergeAppStore(executable: masPath, items: &items) }
-            catch { diagnostics.append("App Store: \(error.localizedDescription)") }
+        if let masTask {
+            do { try mergeAppStore(try await masTask.value, items: &items) }
+            catch {
+                diagnostics.append("App Store: \(error.localizedDescription)")
+                for index in items.indices where items[index].provider == .appStore && !items[index].isOutdated {
+                    items[index].detail = "mas couldn't finish checking the App Store this time. \(error.localizedDescription)"
+                }
+            }
         } else if items.contains(where: { $0.provider == .appStore }) {
-            diagnostics.append("Install the optional mas command-line tool to check and update App Store apps directly.")
+            diagnostics.append("App Store apps aren't checked because mas isn't installed. Choose Homebrew → Install mas… (or run `brew install mas`), then check again.")
         }
         // Keep requests bounded and preserve failures as unknown, never as up-to-date.
         let feedIndices = items.indices.filter { items[$0].provider == .sparkle && items[$0].feedURL != nil }
         for start in stride(from: 0, to: feedIndices.count, by: 6) {
             let batch = feedIndices[start..<min(start + 6, feedIndices.count)].map {
-                ($0, items[$0].feedURL!, items[$0].installedVersion)
+                ($0, items[$0].feedURL!, items[$0].installedVersion, rules.allowsPrereleases(for: items[$0].id))
             }
             let results = await withTaskGroup(of: (Int, SparkleRelease?, String?).self) { group in
-                for (index, feed, version) in batch {
+                for (index, feed, version, prerelease) in batch {
                     group.addTask {
-                        do { return (index, try await SparkleBackend.check(feedURL: feed, installedVersion: version), nil) }
+                        do { return (index, try await SparkleBackend.check(feedURL: feed, installedVersion: version, allowPrerelease: prerelease), nil) }
                         catch { return (index, nil, error.localizedDescription) }
                     }
                 }
@@ -263,12 +281,12 @@ actor Engine {
         let electronIndices = items.indices.filter { items[$0].provider == .electron && items[$0].electronUpdate != nil }
         for start in stride(from: 0, to: electronIndices.count, by: 6) {
             let batch = electronIndices[start..<min(start + 6, electronIndices.count)].map {
-                ($0, items[$0].electronUpdate!, items[$0].installedVersion)
+                ($0, items[$0].electronUpdate!, items[$0].installedVersion, rules.allowsPrereleases(for: items[$0].id))
             }
             let results = await withTaskGroup(of: (Int, ElectronCheckResult?, String?).self) { group in
-                for (index, config, version) in batch {
+                for (index, config, version, prerelease) in batch {
                     group.addTask {
-                        do { return (index, try await ElectronBackend.check(config: config, installedVersion: version), nil) }
+                        do { return (index, try await ElectronBackend.check(config: config, installedVersion: version, allowPrerelease: prerelease), nil) }
                         catch { return (index, nil, error.localizedDescription) }
                     }
                 }
@@ -294,12 +312,12 @@ actor Engine {
         let githubIndices = items.indices.filter { items[$0].provider == .github && items[$0].githubRepository != nil }
         for start in stride(from: 0, to: githubIndices.count, by: 6) {
             let batch = githubIndices[start..<min(start + 6, githubIndices.count)].map {
-                ($0, items[$0].githubRepository!, items[$0].installedVersion)
+                ($0, items[$0].githubRepository!, items[$0].installedVersion, rules.allowsPrereleases(for: items[$0].id))
             }
             let results = await withTaskGroup(of: (Int, GitHubRelease?, String?).self) { group in
-                for (index, repository, version) in batch {
+                for (index, repository, version, prerelease) in batch {
                     group.addTask {
-                        do { return (index, try await GitHubBackend.check(repository: repository, installedVersion: version), nil) }
+                        do { return (index, try await GitHubBackend.check(repository: repository, installedVersion: version, allowPrerelease: prerelease), nil) }
                         catch { return (index, nil, error.localizedDescription) }
                     }
                 }
@@ -332,11 +350,17 @@ actor Engine {
         }
     }
 
-    func update(_ item: UpdateItem) async throws -> String {
+    func update(_ item: UpdateItem, options: InstallOptions = InstallOptions()) async throws -> UpdateOutcome {
         guard item.canUpdateDirectly else { throw UpdateError.unavailable("No verified direct update is available for \(item.name).") }
         if let bundleID = item.bundleID,
            !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
             throw UpdateError.unavailable("Quit \(item.name) before updating it, then try again.")
+        }
+        var options = options
+        options.appName = options.appName ?? item.name
+        func direct(_ release: SparkleRelease, _ path: String) async throws -> UpdateOutcome {
+            let outcome = try await SparkleBackend.install(release: release, target: URL(fileURLWithPath: path), options: options)
+            return UpdateOutcome(message: outcome.message, installedVersion: outcome.installedVersion)
         }
         switch item.provider {
         case .homebrewCask, .homebrewFormula:
@@ -344,30 +368,30 @@ actor Engine {
                 throw UpdateError.unavailable("Homebrew or the package identifier is unavailable.")
             }
             let args = try Self.homebrewArguments(for: item)
-            return try await execute(brewPath, args)
+            return UpdateOutcome(message: try await execute(brewPath, args))
         case .appStore:
-            guard let masPath, let token = item.token, token.allSatisfy(\.isNumber), !token.isEmpty else {
-                throw UpdateError.unavailable("The mas helper or App Store identifier is unavailable.")
-            }
-            return try await execute(masPath, ["upgrade", token])
+            guard let masPath else { throw UpdateError.unavailable("mas isn't installed. Choose Homebrew → Install mas…, or update the app in the App Store.") }
+            guard let token = item.token, AppStoreCLI.validID(token) else { throw UpdateError.unavailable("The App Store ID for this app is unknown. Check for updates again.") }
+            let result = try await CommandRunner.run(masPath, ["update", token], timeout: 1800)
+            let text = result.output + result.errorOutput
+            guard result.status == 0 else { throw UpdateError.unavailable(AppStoreCLI.message(for: text, action: "update \(item.name)")) }
+            return UpdateOutcome(message: text.isEmpty ? "Updated \(item.name) through the App Store." : text, installedVersion: item.latestVersion)
         case .sparkle:
             guard let release = item.sparkleRelease, let path = item.path else {
                 throw UpdateError.unavailable("The Sparkle release or destination is unavailable.")
             }
-            return try await SparkleBackend.install(release: release, target: URL(fileURLWithPath: path))
+            return try await direct(release, path)
         case .github:
             guard let release = item.githubRelease, let download = release.downloadURL, let path = item.path,
                   item.requiresSparkleSignature != true else {
                 throw UpdateError.unavailable("This GitHub release requires manual installation or the app's signed Sparkle feed.")
             }
-            return try await SparkleBackend.install(
-                release: SparkleRelease(version: release.version, downloadURL: download, releaseNotesURL: release.releasePageURL),
-                target: URL(fileURLWithPath: path))
+            return try await direct(SparkleRelease(version: release.version, downloadURL: download, releaseNotesURL: release.releasePageURL), path)
         case .electron:
             guard let release = item.sparkleRelease, release.sha512 != nil, let path = item.path else {
                 throw UpdateError.unavailable("No verifiable Electron payload is available; open the app to use its own updater.")
             }
-            return try await SparkleBackend.install(release: release, target: URL(fileURLWithPath: path))
+            return try await direct(release, path)
         case .vendor, .manual: throw UpdateError.unavailable("This app requires its own updater.")
         }
     }
@@ -461,7 +485,7 @@ actor Engine {
         }
     }
 
-    static func installedApps() -> [UpdateItem] {
+    static func installedApps(roots overrideRoots: [URL]? = nil) -> [UpdateItem] {
         let fm = FileManager.default
         let defaults = UserDefaults.standard
         let customRoots = defaults.stringArray(forKey: "customRoots") ?? []
@@ -470,28 +494,32 @@ actor Engine {
         let candidates = [URL(fileURLWithPath: "/Applications"), fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]
             + customRoots.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
         var seenRoots = Set<String>()
-        let roots = candidates.filter { seenRoots.insert($0.resolvingSymlinksInPath().standardizedFileURL.path).inserted }
+        let roots = (overrideRoots ?? candidates).filter { seenRoots.insert($0.resolvingSymlinksInPath().standardizedFileURL.path).inserted }
         var items: [UpdateItem] = [], seen = Set<String>()
         for root in roots {
             guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
             for case let url as URL in enumerator {
                 guard url.pathExtension.lowercased() == "app" else { continue }
                 enumerator.skipDescendants()
+                // Leftover hidden or *-backup-* copies are never scanned as installed apps.
+                guard !AppBundleInfo.isHiddenOrBackupCopy(url) else { continue }
                 let canonicalPath = url.resolvingSymlinksInPath().path
-                guard seen.insert(canonicalPath).inserted,
-                      let bundle = Bundle(url: url), let info = bundle.infoDictionary else { continue }
+                // Read Info.plist from disk every scan: Bundle caches it, which hid in-place updates.
+                let info = AppBundleInfo.read(url)
+                guard seen.insert(canonicalPath).inserted, !info.isEmpty else { continue }
+                let bundleIdentifier = info["CFBundleIdentifier"] as? String
                 let name = info["CFBundleDisplayName"] as? String ?? info["CFBundleName"] as? String ?? url.deletingPathExtension().lastPathComponent
                 let version = info["CFBundleShortVersionString"] as? String ?? info["CFBundleVersion"] as? String ?? "Unknown"
-                let override = bundle.bundleIdentifier.flatMap { feedOverrides[$0] } ?? feedOverrides[canonicalPath]
+                let override = bundleIdentifier.flatMap { feedOverrides[$0] } ?? feedOverrides[canonicalPath]
                 let feed = (override ?? (info["SUFeedURL"] as? String)).flatMap(URL.init(string:)).flatMap {
                     $0.scheme?.lowercased() == "https" && $0.host != nil && $0.user == nil && $0.password == nil ? $0 : nil
                 }
                 let appStore = fm.fileExists(atPath: url.appendingPathComponent("Contents/_MASReceipt/receipt").path)
-                let repository = bundle.bundleIdentifier.flatMap { githubOverrides[$0] } ?? githubOverrides[canonicalPath]
+                let repository = bundleIdentifier.flatMap { githubOverrides[$0] } ?? githubOverrides[canonicalPath]
                 let validRepository = repository.flatMap { GitHubBackend.validRepository($0) ? $0 : nil }
                 let electron = (appStore || validRepository != nil || feed != nil) ? nil : ElectronBackend.readConfig(appURL: url)
                 let vendor = (appStore || validRepository != nil || feed != nil || electron != nil) ? nil
-                    : VendorUpdaters.detect(bundleID: bundle.bundleIdentifier, info: info, appURL: url)
+                    : VendorUpdaters.detect(bundleID: bundleIdentifier, info: info, appURL: url)
                 let provider: UpdateProvider = appStore ? .appStore : (validRepository != nil ? .github : (feed != nil ? .sparkle : (electron != nil ? .electron : (vendor != nil ? .vendor : .manual))))
                 let detail: String
                 switch provider {
@@ -503,7 +531,7 @@ actor Engine {
                 default: detail = "No supported update feed found. Open the app to use its own updater."
                 }
                 let suggestions = validRepository != nil ? [] : RepositoryDiscovery.suggestions(info: info, sparkleFeed: feed, electron: electron)
-                items.append(UpdateItem(id: canonicalPath, name: name, bundleID: bundle.bundleIdentifier,
+                items.append(UpdateItem(id: canonicalPath, name: name, bundleID: bundleIdentifier,
                                         path: url.path, installedVersion: version, provider: provider, feedURL: feed,
                                         detail: detail, githubRepository: validRepository, requiresSparkleSignature: info["SUPublicEDKey"] is String,
                                         electronUpdate: electron, vendorUpdater: vendor,
@@ -575,26 +603,39 @@ actor Engine {
         }
     }
 
-    private func mergeAppStore(executable: String, items: inout [UpdateItem]) async throws {
-        let result = try await CommandRunner.run(executable, ["outdated"])
-        guard result.status == 0 else { throw UpdateError.command("mas outdated", result.errorOutput, result.status) }
-        let pattern = #"^(\d+)\s+(.+?)\s+\((.+?)\s+->\s+(.+?)\)\s*$"#
-        let regex = try NSRegularExpression(pattern: pattern)
-        for line in result.output.components(separatedBy: .newlines) {
-            let range = NSRange(line.startIndex..., in: line)
-            guard let match = regex.firstMatch(in: line, range: range) else { continue }
-            func field(_ index: Int) -> String { Range(match.range(at: index), in: line).map { String(line[$0]) } ?? "" }
-            let token = field(1), name = field(2), installed = field(3), latest = field(4)
-            let index = items.firstIndex { $0.provider == .appStore && $0.name.caseInsensitiveCompare(name) == .orderedSame }
-            if let index {
-                items[index].token = token; items[index].latestVersion = latest; items[index].isOutdated = true
-                items[index].detail = "App Store update available through mas. Apple authentication may be required."
+    private func mergeAppStore(_ result: CommandResult, items: inout [UpdateItem]) throws {
+        let outdated = AppStoreCLI.parseOutdated(result.output)
+        if result.status != 0 {
+            let text = result.errorOutput.isEmpty ? result.output : result.errorOutput
+            // mas reports per-app lookup failures but still lists what it could check.
+            guard !outdated.isEmpty else { throw UpdateError.unavailable(AppStoreCLI.message(for: text, action: "check for App Store updates")) }
+            diagnostics.append("App Store: some apps couldn't be checked. " + AppStoreCLI.message(for: text, action: "check every app"))
+        }
+        for app in outdated where AppStoreCLI.validID(app.adamID) {
+            if let index = AppStoreCLI.match(app, in: items) {
+                items[index].provider = .appStore
+                items[index].token = app.adamID
+                items[index].latestVersion = app.latestVersion
+                items[index].isOutdated = true
+                items[index].detail = "App Store update found by mas (ID \(app.adamID)). Updating may ask for your administrator password."
             } else {
-                items.append(UpdateItem(id: "mas:\(token)", name: name, installedVersion: installed,
-                                        latestVersion: latest, provider: .appStore, token: token,
-                                        homepage: URL(string: "macappstore://itunes.apple.com/app/id\(token)"), isOutdated: true,
-                                        detail: "App Store update available through mas."))
+                items.append(UpdateItem(id: "mas:\(app.adamID)", name: app.name, bundleID: app.bundleID, path: app.path, installedVersion: app.installedVersion,
+                                        latestVersion: app.latestVersion, provider: .appStore, token: app.adamID,
+                                        homepage: URL(string: "macappstore://apps.apple.com/app/id\(app.adamID)"), isOutdated: true,
+                                        detail: "App Store update found by mas (ID \(app.adamID))."))
             }
         }
+        for index in items.indices where items[index].provider == .appStore && !items[index].isOutdated {
+            items[index].latestVersion = items[index].installedVersion
+            items[index].detail = "Checked with mas: no App Store update."
+        }
     }
+
+    /// Installs the mas formula with Homebrew after the user confirmed it.
+    func installMas() async throws -> String {
+        guard let brewPath else { throw UpdateError.unavailable("Homebrew is not installed, so mas can't be installed from here. See https://github.com/mas-cli/mas.") }
+        return try await execute(brewPath, ["install", "mas"])
+    }
+
+    var masInstalled: Bool { masPath != nil }
 }

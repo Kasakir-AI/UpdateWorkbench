@@ -4,7 +4,6 @@ import AppKit
 struct ItemDetail: View {
     let item: UpdateItem
     @EnvironmentObject var model: WorkbenchModel
-    @State private var confirm = false
     @State private var feedOverride = ""
     @State private var adoptionToken = ""
     @State private var confirmAdoption = false
@@ -24,6 +23,7 @@ struct ItemDetail: View {
             VStack(alignment: .leading, spacing: Theme.spacing) {
                 header(status)
                 versionCard(status)
+                if item.isOutdated { whatsNewCard }
                 let hasSuggestions = !(item.repositorySuggestions ?? []).isEmpty || !(item.caskSuggestions ?? []).isEmpty
                 if hasSuggestions && !item.canUpdateDirectly { suggestionsCard }
                 aboutCard
@@ -58,9 +58,19 @@ struct ItemDetail: View {
         .confirmationDialog("Move \(item.name) to the Trash?", isPresented: $confirmTrash) {
             Button("Move to Trash", role: .destructive) { model.moveToTrash(item) }
         } message: { Text("The app bundle is moved to the Trash, not deleted, and can be restored from there. Its settings and data are left in place. Quit the app first.") }
-        .confirmationDialog("Update \(item.name)?", isPresented: $confirm) {
-            Button("Update") { model.update([item]) }
-        } message: { Text("Installs \(item.latestVersion ?? "the latest version"). Close the app first. The result will appear in Console.") }
+        .onAppear { model.loadNotes(item) }
+    }
+
+    private var whatsNewCard: some View {
+        Card(title: "What's new in \(item.latestVersion ?? "the update")", symbol: "sparkles", tint: Theme.pink) {
+            WhatsNewContent(item: item)
+                .frame(maxHeight: 260, alignment: .top)
+                .clipped()
+            if model.notes(for: item).map({ $0.count > 600 }) == true {
+                Button { model.pendingUpdate = item } label: { Label("Read all and update…", systemImage: "text.alignleft") }
+                    .buttonStyle(.link).font(.callout).disabled(!item.canUpdateDirectly)
+            }
+        }
     }
 
     // MARK: Sections
@@ -106,6 +116,18 @@ struct ItemDetail: View {
             if let until = model.snoozed[item.id], until > Date().timeIntervalSince1970 {
                 Label("Snoozed until \(Date(timeIntervalSince1970: until).formatted(date: .abbreviated, time: .shortened))", systemImage: "moon.zzz.fill").font(.caption).foregroundStyle(.purple)
             }
+            if status == .heldBack {
+                HStack(spacing: 8) {
+                    Label("\(item.latestVersion ?? "This version") is a pre-release. Your rules hold back betas.", systemImage: "flask.fill").font(.callout).foregroundStyle(.orange)
+                    Spacer(minLength: 0)
+                    Button("Allow Betas for This App") { model.setPrereleaseRule(.allow, for: item.id) }.controlSize(.small)
+                }
+            }
+            if let approval = model.approvals.first(where: { $0.bundleID == item.bundleID }) {
+                Label("You approved team \(approval.teamID) (\(approval.signerName)) for this app on \(approval.approvedAt.formatted(date: .abbreviated, time: .omitted)).", systemImage: "person.badge.shield.checkmark.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if item.provider == .appStore { appStoreHelp }
             if item.isOutdated && !item.canUpdateDirectly {
                 Text(item.vendorUpdater != nil ? "This app updates through its own updater. Open it to install the new version." : "No verified direct update route is available for this item, so it can't be installed here.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -113,9 +135,36 @@ struct ItemDetail: View {
         }
     }
 
+    /// mas status and the next step for App Store apps.
+    @ViewBuilder private var appStoreHelp: some View {
+        if !model.masInstalled {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("App Store apps are checked with mas, the Mac App Store command-line tool, which isn't installed.", systemImage: "bag.badge.questionmark")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button { model.confirmInstallMas = true } label: { Label("Install mas…", systemImage: "arrow.down.app") }.disabled(model.busy)
+                    Button { NSWorkspace.shared.open(URL(string: "macappstore://showUpdatesPage")!) } label: { Label("Open App Store Updates", systemImage: "bag") }
+                }
+            }
+        } else if let failure = model.failures[item.id], AppStoreCLI.classify(failure) == .needsAdministrator {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("mas needs your administrator password to install App Store updates, which it can only ask for in Terminal.", systemImage: "lock.shield")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button { model.finishInTerminal(item) } label: { Label("Finish in Terminal", systemImage: "terminal") }
+                        .help("Opens Terminal and runs mas update for this app; enter your password there")
+                    Button { NSWorkspace.shared.open(URL(string: "macappstore://showUpdatesPage")!) } label: { Label("Open App Store Updates", systemImage: "bag") }
+                }
+            }
+        } else if item.isOutdated {
+            Label("Updated with mas update\(item.token.map { " " + $0 } ?? ""). It may ask for your administrator password; if so, finish in Terminal or the App Store.", systemImage: "bag")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     @ViewBuilder private var primaryAction: some View {
         if item.canUpdateDirectly && item.isOutdated {
-            Button { confirm = true } label: { Label("Update to \(item.latestVersion ?? "Latest")", systemImage: "arrow.down.circle.fill") }
+            Button { model.pendingUpdate = item } label: { Label("Update to \(item.latestVersion ?? "Latest")", systemImage: "arrow.down.circle.fill") }
                 .buttonStyle(.borderedProminent).disabled(model.busy)
                 .help("Download and install the new version after confirmation")
         } else if let vendor = item.vendorUpdater {
@@ -137,6 +186,12 @@ struct ItemDetail: View {
             Button("Snooze for 2 Days") { model.snooze(item, days: 2) }
             Button("Snooze for 4 Days") { model.snooze(item, days: 4) }
             if model.snoozed[item.id] != nil { Button("Clear Snooze") { model.snooze(item, days: 0) } }
+            Divider()
+            Picker("Pre-releases and Betas", selection: Binding(get: { model.prereleaseRules[item.id] ?? .followGlobal }, set: { model.setPrereleaseRule($0, for: item.id) })) {
+                Text("Use Global Setting (\(model.holdPrereleases ? "Hold Back" : "Allow"))").tag(PrereleaseRule.followGlobal)
+                Text("Always Hold Back").tag(PrereleaseRule.hold)
+                Text("Allow for This App").tag(PrereleaseRule.allow)
+            }
             Divider()
             Button(model.ignored.contains(item.id) ? "Stop Ignoring This App" : "Ignore This App") { model.ignore(item) }
         } label: { Label("Later", systemImage: "clock") }

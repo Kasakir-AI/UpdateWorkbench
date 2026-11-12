@@ -74,6 +74,7 @@ extension ItemStatus {
         case .manualUpdate: .orange
         case .selfUpdating: UpdateProvider.vendor.tint
         case .snoozed: .purple
+        case .heldBack: .orange
         case .skipped, .ignored, .unknown: .secondary
         case .upToDate: .green
         }
@@ -97,6 +98,7 @@ extension SidebarSection {
         case .packages: UpdateProvider.homebrewFormula.tint
         case .suggestions: Color(red: 1.0, green: 0.78, blue: 0.20)
         case .ignored: .gray
+        case .history: Theme.pink
         case .permissions: Theme.mint
         }
     }
@@ -145,7 +147,7 @@ struct AppIconView: View {
     var body: some View {
         Group {
             if let path = item.path, FileManager.default.fileExists(atPath: path) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().interpolation(.high)
+                Image(nsImage: AppIconCache.icon(forFile: path)).resizable().interpolation(.high)
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
@@ -247,5 +249,17 @@ extension AppearanceMode {
     }
     var symbol: String {
         switch self { case .dark: "moon.stars.fill"; case .light: "sun.max.fill"; case .system: "circle.lefthalf.filled" }
+    }
+}
+
+/// Workspace icons are loaded once per path instead of on every view update.
+@MainActor
+enum AppIconCache {
+    private static let cache: NSCache<NSString, NSImage> = { let cache = NSCache<NSString, NSImage>(); cache.countLimit = 600; return cache }()
+    static func icon(forFile path: String) -> NSImage {
+        if let cached = cache.object(forKey: path as NSString) { return cached }
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        cache.setObject(icon, forKey: path as NSString)
+        return icon
     }
 }

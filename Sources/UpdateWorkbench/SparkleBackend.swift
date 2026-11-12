@@ -9,14 +9,33 @@ struct SparkleRelease: Codable, Sendable {
     let signature: String?
     /// Base64 (electron-builder) or hex SHA-512 of the complete download, when the feed publishes one.
     let sha512: String?
+    /// Sanitized release notes from the feed (Sparkle `description`, Electron `releaseNotes`).
+    var notes: String?
 
-    init(version: String, downloadURL: URL, releaseNotesURL: URL?, signature: String? = nil, sha512: String? = nil) {
+    init(version: String, downloadURL: URL, releaseNotesURL: URL?, signature: String? = nil, sha512: String? = nil, notes: String? = nil) {
         self.version = version
         self.downloadURL = downloadURL
         self.releaseNotesURL = releaseNotesURL
         self.signature = signature
         self.sha512 = sha512
+        self.notes = notes
     }
+}
+
+/// Settings for one direct installation.
+struct InstallOptions: Sendable {
+    /// Approved signer changes; nil disables approvals (self-update).
+    var trustedSigners: TrustedSignerStore? = .standard
+    /// The user accepted the disk image's license agreement.
+    var acceptLicense = false
+    var verifier: any SignatureVerifier = CodesignVerifier()
+    var appName: String?
+}
+
+struct InstallOutcome: Sendable {
+    let message: String
+    let installedVersion: String
+    let signerApproved: Bool
 }
 
 /// Reads public appcasts and installs authenticated, complete macOS app bundles.
@@ -40,7 +59,7 @@ enum SparkleBackend {
         candidate.compare(installed, options: [.numeric, .caseInsensitive]) == .orderedDescending
     }
 
-    static func check(feedURL: URL, installedVersion: String) async throws -> SparkleRelease? {
+    static func check(feedURL: URL, installedVersion: String, allowPrerelease: Bool = false) async throws -> SparkleRelease? {
         try requireHTTPS(feedURL)
         let guardDelegate = HTTPSOnlyDelegate(maximumBytes: 8 * 1024 * 1024)
         let configuration = URLSessionConfiguration.ephemeral
@@ -55,12 +74,14 @@ enum SparkleBackend {
             throw Failure(message: "The appcast was unavailable or larger than 8 MB.")
         }
         let data = try Data(contentsOf: file)
-        return try parseAppcast(data, installedVersion: installedVersion)
+        return try parseAppcast(data, installedVersion: installedVersion, allowPrerelease: allowPrerelease)
     }
 
-    static func parseAppcast(_ data: Data, installedVersion: String) throws -> SparkleRelease? {
+    /// Stable items only, unless pre-releases are allowed for this app (then any `sparkle:channel` counts).
+    static func parseAppcast(_ data: Data, installedVersion: String, allowPrerelease: Bool = false) throws -> SparkleRelease? {
         guard data.count <= 8 * 1024 * 1024 else { throw Failure(message: "The appcast exceeds 8 MB.") }
         let reader = AppcastReader()
+        reader.allowPrerelease = allowPrerelease
         let parser = XMLParser(data: data)
         parser.shouldResolveExternalEntities = false
         parser.delegate = reader
@@ -70,18 +91,14 @@ enum SparkleBackend {
     }
 
     /// `replacingRunningSelf` is only honored when the target is this running app's own bundle (self-update).
-    static func install(release: SparkleRelease, target: URL, replacingRunningSelf: Bool = false) async throws -> String {
+    static func install(release: SparkleRelease, target: URL, replacingRunningSelf: Bool = false,
+                        options: InstallOptions = InstallOptions()) async throws -> InstallOutcome {
         try requireHTTPS(release.downloadURL)
         let isSelf = replacingRunningSelf && target.resolvingSymlinksInPath().standardizedFileURL == Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL
         if !isSelf { try await assertNotRunning(target) }
         let fm = FileManager.default
         let original = target.standardizedFileURL
-        guard original.pathExtension.lowercased() == "app",
-              (try? original.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == false,
-              fm.isWritableFile(atPath: original.path),
-              fm.isWritableFile(atPath: original.deletingLastPathComponent().path) else {
-            throw Failure(message: "This app cannot be replaced by your account. Use its own updater or package manager.")
-        }
+        try requireReplaceable(original)
         let temporary = fm.temporaryDirectory.appendingPathComponent("UpdateWorkbench-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: temporary, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: temporary) }
@@ -102,90 +119,145 @@ enum SparkleBackend {
         }
         let payload = temporary.appendingPathComponent("download.\(fileExtension)")
         try fm.moveItem(at: downloaded, to: payload)
+        return try await installPayload(payload, fileExtension: fileExtension, release: release, target: original, isSelf: isSelf, options: options)
+    }
+
+    private static func requireReplaceable(_ original: URL) throws {
+        let fm = FileManager.default
+        guard original.pathExtension.lowercased() == "app",
+              (try? original.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == false,
+              fm.isWritableFile(atPath: original.path),
+              fm.isWritableFile(atPath: original.deletingLastPathComponent().path) else {
+            throw Failure(message: "This app cannot be replaced by your account. Use its own updater or package manager.")
+        }
+    }
+
+    /// Verifies and installs an already downloaded ZIP or DMG. ZIPs are extracted with symlink checks;
+    /// DMGs are mounted read-only (nobrowse, noautoopen) and always detached, also on errors.
+    static func installPayload(_ payload: URL, fileExtension: String, release: SparkleRelease, target: URL,
+                               isSelf: Bool = false, options: InstallOptions = InstallOptions()) async throws -> InstallOutcome {
+        let original = target.standardizedFileURL
+        try requireReplaceable(original)
+        guard ["zip", "dmg"].contains(fileExtension) else { throw Failure(message: "Direct installation supports complete ZIP or DMG app bundles.") }
         if let sha512 = release.sha512 { try verifySHA512(payload, expected: sha512) }
-        if let publicKey = Bundle(url: original)?.object(forInfoDictionaryKey: "SUPublicEDKey") as? String {
+        if let publicKey = AppBundleInfo.read(original)["SUPublicEDKey"] as? String {
             try verifyArchiveSignature(payload, signature: release.signature, publicKey: publicKey)
         }
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("UpdateWorkbench-work-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: work) }
         return try await Task.detached(priority: .userInitiated) {
-            let fm = FileManager.default
-            let sourceRoot = temporary.appendingPathComponent("payload", isDirectory: true)
-            try fm.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
-            var mounted = false
-            defer {
-                if mounted { _ = try? command("/usr/bin/hdiutil", ["detach", sourceRoot.path, "-quiet"]) }
-            }
+            let sourceRoot = work.appendingPathComponent("payload", isDirectory: true)
+            try FileManager.default.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+            let originalInfo = AppBundleInfo.read(original)
+            let appName = options.appName ?? (originalInfo["CFBundleName"] as? String) ?? original.deletingPathExtension().lastPathComponent
             if fileExtension == "zip" {
                 // Validates every entry and link target before writing anything, then extracts.
                 try ArchiveSafety.extractZIP(payload, to: sourceRoot)
             } else {
-                _ = try command("/usr/bin/hdiutil", ["attach", payload.path, "-readonly", "-nobrowse", "-noautoopen", "-mountpoint", sourceRoot.path, "-plist"])
-                mounted = true
+                try DiskImage.attach(payload, at: sourceRoot, acceptLicense: options.acceptLicense, appName: appName, version: release.version)
             }
-            let oldBundle = Bundle(url: original)
-            guard let identifier = oldBundle?.bundleIdentifier else { throw Failure(message: "The installed app has no bundle identity.") }
-            let candidates = try applicationCandidates(in: sourceRoot).filter { Bundle(url: $0)?.bundleIdentifier == identifier }
-            guard candidates.count == 1, let candidate = candidates.first else {
-                throw Failure(message: "The download must contain exactly one app matching the installed bundle identifier.")
-            }
-            try ArchiveSafety.validateExtracted(app: candidate, rejectHardLinks: fileExtension == "zip")
-            let newBundle = Bundle(url: candidate)
-            let newVersion = newBundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-            let newBuild = newBundle?.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-            guard let executable = newBundle?.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
-                  !executable.isEmpty, !executable.contains("/"), executable != ".", executable != ".." else {
-                throw Failure(message: "The downloaded app has no valid executable declaration.")
-            }
-            let architectures = try command("/usr/bin/lipo", ["-archs", candidate.appendingPathComponent("Contents/MacOS").appendingPathComponent(executable).path])
-                .split(whereSeparator: \.isWhitespace).map(String.init)
-            guard architectures.contains(hostArchitecture) else {
-                throw Failure(message: "The update has no native \(hostArchitecture) executable. Use the vendor updater for translated apps.")
-            }
-            if let minimumOS = newBundle?.object(forInfoDictionaryKey: "LSMinimumSystemVersion") as? String {
-                let os = ProcessInfo.processInfo.operatingSystemVersion
-                guard !isNewer(minimumOS, than: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)") else {
-                    throw Failure(message: "The downloaded app requires a newer version of macOS.")
-                }
-            }
-            guard release.version == newVersion || release.version == newBuild else {
-                throw Failure(message: "The downloaded app version does not match the selected update.")
-            }
-            let oldVersion = oldBundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-            let oldBuild = oldBundle?.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-            guard isNewer(newVersion, than: oldVersion) || (newVersion == oldVersion && isNewer(newBuild, than: oldBuild)) else {
-                throw Failure(message: "The downloaded app is not newer than the installed app.")
-            }
-            _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", original.path])
-            let originalTeam = try signingTeam(original)
-            let candidateTeam = try signingTeam(candidate)
-            guard candidateTeam == originalTeam else {
-                throw Failure(message: "The update is signed by a different developer team (\(candidateTeam)) than the installed app (\(originalTeam)), so it was not installed. Use the app's own updater or the vendor's download page if you trust the new signer.")
-            }
-            _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", candidate.path])
-            _ = try command("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", candidate.path])
-            let parent = original.deletingLastPathComponent()
-            let staged = parent.appendingPathComponent(".UpdateWorkbench-stage-\(UUID().uuidString).app")
-            let backup = parent.appendingPathComponent(".\(original.deletingPathExtension().lastPathComponent)-backup-\(UUID().uuidString).app")
-            defer { try? fm.removeItem(at: staged) }
-            _ = try command("/usr/bin/ditto", [candidate.path, staged.path])
-            _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", staged.path])
-            guard try signingTeam(staged) == originalTeam else { throw Failure(message: "The staged app failed its signing identity check.") }
-            // Re-check the original identity immediately before replacing it.
-            guard Bundle(url: original)?.bundleIdentifier == identifier, try signingTeam(original) == originalTeam else {
-                throw Failure(message: "The installed app changed while downloading. Scan again.")
-            }
-            let isRunning = await MainActor.run {
-                NSWorkspace.shared.runningApplications.contains { $0.bundleURL?.resolvingSymlinksInPath() == original.resolvingSymlinksInPath() }
-            }
-            guard isSelf || !isRunning else { throw Failure(message: "Quit the app before installing its update.") }
-            try fm.moveItem(at: original, to: backup)
-            do { try fm.moveItem(at: staged, to: original) }
-            catch {
-                do { try fm.moveItem(at: backup, to: original) }
-                catch { throw Failure(message: "Installation and rollback failed. The original app is at \(backup.path).") }
-                throw error
-            }
-            return "Installed \(release.version). Previous app retained at \(backup.path)"
+            defer { if fileExtension == "dmg" { DiskImage.detach(sourceRoot) } }
+            return try await verifyAndReplace(sourceRoot: sourceRoot, original: original, release: release, appName: appName,
+                                              isZIP: fileExtension == "zip", isSelf: isSelf, options: options)
         }.value
+    }
+
+    /// The checks shared by ZIP and DMG payloads, then staging and replacement. The previous copy exists only
+    /// during the swap: it is deleted once the new app is in place and verified, or put back if anything fails.
+    private static func verifyAndReplace(sourceRoot: URL, original: URL, release: SparkleRelease, appName: String,
+                                         isZIP: Bool, isSelf: Bool, options: InstallOptions) async throws -> InstallOutcome {
+        let fm = FileManager.default
+        let verifier = options.verifier
+        let oldInfo = AppBundleInfo.read(original)
+        guard let identifier = oldInfo["CFBundleIdentifier"] as? String else { throw Failure(message: "The installed app has no bundle identity.") }
+        let candidates = try applicationCandidates(in: sourceRoot).filter { AppBundleInfo.read($0)["CFBundleIdentifier"] as? String == identifier }
+        guard candidates.count == 1, let candidate = candidates.first else {
+            throw Failure(message: candidates.isEmpty ? "The download contains no app with the installed bundle identifier (\(identifier))."
+                          : "The download contains \(candidates.count) apps with the bundle identifier \(identifier), so the right one can't be chosen safely.")
+        }
+        try ArchiveSafety.validateExtracted(app: candidate, rejectHardLinks: isZIP)
+        let newInfo = AppBundleInfo.read(candidate)
+        let newVersion = newInfo["CFBundleShortVersionString"] as? String ?? ""
+        let newBuild = newInfo["CFBundleVersion"] as? String ?? ""
+        guard let executable = newInfo["CFBundleExecutable"] as? String,
+              !executable.isEmpty, !executable.contains("/"), executable != ".", executable != ".." else {
+            throw Failure(message: "The downloaded app has no valid executable declaration.")
+        }
+        let architectures = try SyncCommand.run("/usr/bin/lipo", ["-archs", candidate.appendingPathComponent("Contents/MacOS").appendingPathComponent(executable).path])
+            .split(whereSeparator: \.isWhitespace).map(String.init)
+        guard architectures.contains(hostArchitecture) else {
+            throw Failure(message: "The update has no native \(hostArchitecture) executable. Use the vendor updater for translated apps.")
+        }
+        if let minimumOS = newInfo["LSMinimumSystemVersion"] as? String {
+            let os = ProcessInfo.processInfo.operatingSystemVersion
+            guard !isNewer(minimumOS, than: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)") else {
+                throw Failure(message: "The downloaded app requires a newer version of macOS.")
+            }
+        }
+        guard release.version == newVersion || release.version == newBuild else {
+            throw Failure(message: "The downloaded app version (\(newVersion)) does not match the selected update (\(release.version)).")
+        }
+        let oldVersion = oldInfo["CFBundleShortVersionString"] as? String ?? ""
+        let oldBuild = oldInfo["CFBundleVersion"] as? String ?? ""
+        guard isNewer(newVersion, than: oldVersion) || (newVersion == oldVersion && isNewer(newBuild, than: oldBuild)) else {
+            throw Failure(message: "The downloaded app is not newer than the installed app.")
+        }
+        try verifier.verify(original)
+        let installedSigner = try verifier.identity(original)
+        // The candidate must pass codesign and Gatekeeper before any signer question is asked.
+        try verifier.verify(candidate)
+        var candidateSigner = try verifier.identity(candidate)
+        candidateSigner.gatekeeper = try verifier.assess(candidate)
+        var approved = false
+        if candidateSigner.teamID != installedSigner.teamID {
+            guard let store = options.trustedSigners, store.isApproved(bundleID: identifier, teamID: candidateSigner.teamID) else {
+                throw SignerChange(appName: appName, bundleID: identifier, version: release.version, installed: installedSigner, candidate: candidateSigner)
+            }
+            approved = true
+        }
+        // Staging happens in a private replacement folder on the same volume, never beside the app.
+        let workspace = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: original, create: true)
+        var keepWorkspace = false
+        defer { if !keepWorkspace { try? fm.removeItem(at: workspace) } }
+        let staged = workspace.appendingPathComponent(original.lastPathComponent)
+        let previous = workspace.appendingPathComponent("previous-" + original.lastPathComponent)
+        try SyncCommand.run("/usr/bin/ditto", [candidate.path, staged.path])
+        try verifier.verify(staged)
+        guard try verifier.identity(staged).teamID == candidateSigner.teamID else { throw Failure(message: "The staged app failed its signing identity check.") }
+        // Re-check the original identity immediately before replacing it.
+        guard AppBundleInfo.read(original)["CFBundleIdentifier"] as? String == identifier, try verifier.identity(original).teamID == installedSigner.teamID else {
+            throw Failure(message: "The installed app changed while downloading. Scan again.")
+        }
+        let isRunning = await MainActor.run {
+            NSWorkspace.shared.runningApplications.contains { $0.bundleURL?.resolvingSymlinksInPath() == original.resolvingSymlinksInPath() }
+        }
+        guard isSelf || !isRunning else { throw Failure(message: "Quit the app before installing its update.") }
+        try fm.moveItem(at: original, to: previous)
+        do {
+            try fm.moveItem(at: staged, to: original)
+            // Verify the app now in place before the previous copy is discarded.
+            guard AppBundleInfo.read(original)["CFBundleShortVersionString"] as? String == newVersion,
+                  AppBundleInfo.read(original)["CFBundleIdentifier"] as? String == identifier else {
+                throw Failure(message: "The installed app didn't match the update after it was moved into place.")
+            }
+            try verifier.verify(original)
+            guard try verifier.identity(original).teamID == candidateSigner.teamID else { throw Failure(message: "The installed app failed its signing identity check.") }
+        } catch {
+            do {
+                if fm.fileExists(atPath: original.path) { try fm.removeItem(at: original) }
+                try fm.moveItem(at: previous, to: original)
+            } catch {
+                keepWorkspace = true
+                throw Failure(message: "Installation and rollback failed. The previous app is at \(previous.path); move it back to \(original.deletingLastPathComponent().path).")
+            }
+            throw Failure(message: "The update was rolled back and the previous version is back in place: \(error.localizedDescription)")
+        }
+        try? fm.removeItem(at: previous)
+        let signerNote = approved ? " Signed by approved team \(candidateSigner.teamID) (\(candidateSigner.signerName))." : ""
+        return InstallOutcome(message: "Installed \(release.version).\(signerNote) The previous version was removed after the new one passed its checks.",
+                              installedVersion: newVersion, signerApproved: approved)
     }
 
     private static func assertNotRunning(_ target: URL) async throws {
@@ -230,34 +302,6 @@ enum SparkleBackend {
         guard Data(base64Encoded: trimmed) == digest || trimmed.lowercased() == hex else {
             throw Failure(message: "The downloaded update failed its published SHA-512 checksum.")
         }
-    }
-
-    private static func command(_ path: String, _ arguments: [String]) throws -> String {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
-        process.standardInput = FileHandle.nullDevice
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        let output = String(decoding: data, as: UTF8.self)
-        guard process.terminationStatus == 0 else {
-            throw Failure(message: "\(URL(fileURLWithPath: path).lastPathComponent) failed: \(output.suffix(2000))")
-        }
-        return output
-    }
-
-    private static func signingTeam(_ app: URL) throws -> String {
-        let output = try command("/usr/bin/codesign", ["-d", "--verbose=4", app.path])
-        guard let line = output.split(separator: "\n").first(where: { $0.hasPrefix("TeamIdentifier=") }) else {
-            throw Failure(message: "The app has no developer signing team. Direct replacement is unavailable.")
-        }
-        let value = String(line.dropFirst("TeamIdentifier=".count))
-        guard !value.isEmpty, value != "not set" else { throw Failure(message: "Ad-hoc or unsigned apps cannot be replaced directly.") }
-        return value
     }
 
     private static func applicationCandidates(in root: URL) throws -> [URL] {
@@ -306,6 +350,7 @@ private final class HTTPSOnlyDelegate: NSObject, URLSessionDownloadDelegate, @un
 
 private final class AppcastReader: NSObject, XMLParserDelegate {
     var releases: [SparkleRelease] = []
+    var allowPrerelease = false
     private var current: [String: String] = [:]
     private var itemDepth = 0
     private var element = ""
@@ -331,7 +376,7 @@ private final class AppcastReader: NSObject, XMLParserDelegate {
             let minimumOS = current["sparkle:minimumSystemVersion"] ?? "0"
             let os = ProcessInfo.processInfo.operatingSystemVersion
             let currentOS = "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
-            if channel.isEmpty || channel == "stable", !SparkleBackend.isNewer(minimumOS, than: currentOS) {
+            if channel.isEmpty || channel == "stable" || allowPrerelease, !SparkleBackend.isNewer(minimumOS, than: currentOS) {
                 for enclosure in enclosures {
                     guard enclosure["sparkle:deltaFrom"] == nil,
                           enclosure["sparkle:os"] == nil || enclosure["sparkle:os"] == "macos",
@@ -339,8 +384,9 @@ private final class AppcastReader: NSObject, XMLParserDelegate {
                           let rawURL = enclosure["url"], let url = URL(string: rawURL), url.scheme?.lowercased() == "https",
                           let version = enclosure["sparkle:shortVersionString"] ?? current["sparkle:shortVersionString"] ?? enclosure["sparkle:version"] ?? current["sparkle:version"] else { continue }
                     let notes = current["sparkle:releaseNotesLink"].flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
+                    let description = current["description"].map(ReleaseNotes.sanitize).flatMap { $0.isEmpty ? nil : $0 }
                     releases.append(SparkleRelease(version: version, downloadURL: url, releaseNotesURL: notes,
-                                                   signature: enclosure["sparkle:edSignature"]))
+                                                   signature: enclosure["sparkle:edSignature"], notes: description))
                 }
             }
         }

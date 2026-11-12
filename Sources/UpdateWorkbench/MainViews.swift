@@ -11,12 +11,21 @@ struct ContentView: View {
         } content: {
             Group {
                 if model.section == .permissions { PermissionsView() }
+                else if model.section == .history { HistoryListColumn() }
                 else { ItemListColumn() }
             }
             .navigationTitle(model.section.rawValue)
             .navigationSplitViewColumnWidth(min: 380, ideal: 460, max: 640)
         } detail: {
-            if model.section != .permissions, let item = model.chosen {
+            if model.section == .history {
+                if let entry = model.history.first(where: { $0.id == model.selectedHistory }) {
+                    HistoryDetail(entry: entry).id(entry.id)
+                } else {
+                    ContentUnavailableView {
+                        Label("Select an update", systemImage: "clock.arrow.circlepath")
+                    } description: { Text("Pick an entry to see what changed and how it went.") }
+                }
+            } else if model.section != .permissions, let item = model.chosen {
                 ItemDetail(item: item).id(item.id)
             } else if model.section == .permissions {
                 PermissionsHelpView()
@@ -55,6 +64,12 @@ struct ContentView: View {
         .confirmationDialog("Clean Homebrew caches and old versions?", isPresented: $maintenanceConfirmation) {
             Button("Run Cleanup") { model.showConsole = true; model.maintain("cleanup") }
         } message: { Text("Runs brew cleanup. Installed apps and packages are not removed.") }
+        .sheet(item: $model.pendingUpdate) { item in UpdateConfirmSheet(item: item).environmentObject(model) }
+        .sheet(item: $model.signerChange) { change in SignerApprovalSheet(change: change).environmentObject(model) }
+        .sheet(item: $model.licensePrompt) { prompt in LicenseSheet(prompt: prompt).environmentObject(model) }
+        .confirmationDialog("Install mas with Homebrew?", isPresented: $model.confirmInstallMas) {
+            Button("Install mas") { model.showConsole = true; model.installMas() }
+        } message: { Text("Runs brew install mas. mas is the open-source Mac App Store command-line tool; Update Workbench uses it to check App Store apps (mas outdated) and, when you choose Update, to install them (mas update). You stay signed in to the App Store app as usual.") }
         .confirmationDialog("Update \(model.directUpdates.count) apps and packages?", isPresented: $model.confirmUpdateAll) {
             Button("Update All") { model.update(model.updates) }
         } message: { Text("Downloads and installations run directly. Close apps before updating them. Items requiring administrator access may fail and report the reason in Console. Apps that update through their own updater are not included.") }
@@ -66,7 +81,7 @@ struct SidebarView: View {
     var body: some View {
         List(selection: $model.section) {
             Section("Library") {
-                ForEach([SidebarSection.updates, .applications, .packages, .suggestions, .ignored]) { row($0) }
+                ForEach([SidebarSection.updates, .applications, .packages, .suggestions, .ignored, .history]) { row($0) }
             }
             Section("Mac") { row(.permissions) }
         }
@@ -77,7 +92,7 @@ struct SidebarView: View {
     @ViewBuilder private func row(_ section: SidebarSection) -> some View {
         let count = model.count(section)
         Label { Text(section.rawValue) } icon: { Image(systemName: section.symbol).foregroundStyle(section.tint) }
-            .badge([.updates, .suggestions, .ignored, .permissions].contains(section) ? count : 0)
+            .badge([.updates, .suggestions, .ignored, .permissions, .history].contains(section) ? count : 0)
             .help(section.subtitle)
             .tag(section)
             .accessibilityLabel(count > 0 ? "\(section.rawValue), \(count)" : section.rawValue)
@@ -257,7 +272,6 @@ struct FilterBar: View {
 struct ItemRow: View {
     let item: UpdateItem
     @EnvironmentObject var model: WorkbenchModel
-    @State private var confirmUpdate = false
     var body: some View {
         let status = model.status(item)
         HStack(spacing: 12) {
@@ -276,7 +290,7 @@ struct ItemRow: View {
             Spacer(minLength: 6)
             VersionColumn(item: item)
             if model.section == .updates && item.canUpdateDirectly {
-                Button("Update") { confirmUpdate = true }
+                Button("Update") { model.pendingUpdate = item }
                     .buttonStyle(.borderedProminent).controlSize(.small)
                     .disabled(model.busy)
                     .help("Update \(item.name) to \(item.latestVersion ?? "the latest version")")
@@ -286,9 +300,6 @@ struct ItemRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.name), \(item.provider.rawValue), \(status.rawValue), installed \(item.installedVersion)\(item.isOutdated ? ", available \(item.latestVersion ?? "")" : "")")
-        .confirmationDialog("Update \(item.name)?", isPresented: $confirmUpdate) {
-            Button("Update") { model.update([item]) }
-        } message: { Text("Installs \(item.latestVersion ?? "the latest version"). Close the app first. The result will appear in Console.") }
     }
 }
 
@@ -354,7 +365,7 @@ struct EmptyStateView: View {
                 } description: { Text("Find Homebrew matches for apps that have no update source. It only reads public Homebrew data.") }
                 actions: { Button("Find Homebrew Matches") { model.findHomebrewMatches() }.disabled(model.busy || model.items.isEmpty) }
             case .ignored:
-                ContentUnavailableView("Nothing ignored", systemImage: "eye", description: Text("Use Later in an app's details to skip a version, snooze it or ignore the app."))
+                ContentUnavailableView("Nothing ignored", systemImage: "eye", description: Text("Use Later in an app's details to skip a version, snooze it, ignore the app or hold back betas. Manage rules in Settings → Rules."))
             case .packages:
                 ContentUnavailableView("No Homebrew packages", systemImage: "shippingbox", description: Text("Command-line packages installed with Homebrew appear here."))
             default:
