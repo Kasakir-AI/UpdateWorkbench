@@ -14,7 +14,7 @@ enum DiskImageTests {
 
     static func run() async throws {
         let fm = FileManager.default
-        let work = fm.temporaryDirectory.appendingPathComponent("uw-dmg-\(UUID().uuidString)", isDirectory: true)
+        let work = TestTemp.root.appendingPathComponent("uw-dmg-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: work) }
         let store = TrustedSignerStore(fileURL: work.appendingPathComponent("trusted-signers.json"))

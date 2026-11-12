@@ -19,10 +19,12 @@ Requires macOS 14 or newer on Apple silicon. Check the download against `SHA256S
 Requires Xcode command-line tools.
 
 ```sh
-./build.sh   # builds dist/UpdateWorkbench.app (ad-hoc signed)
+./build.sh   # builds dist.noindex/UpdateWorkbench.app (ad-hoc signed)
 ./test.sh    # offline test suite
 ./make-release.sh   # DMG, ZIP and SHA256SUMS in release/
 ```
+
+Builds go to `dist.noindex/`. Spotlight skips folders whose names end in `.noindex`, so development builds, test fixtures and release staging never appear in Spotlight or Launchpad next to the copy in Applications.
 
 ## New in 0.4.0
 
@@ -74,7 +76,7 @@ To render every screen yourself in dark and light (fake data, no scanning, nothi
 
 ```sh
 ./build.sh
-dist/UpdateWorkbench.app/Contents/MacOS/UpdateWorkbench --render-snapshots /tmp/updateworkbench-snapshots
+dist.noindex/UpdateWorkbench.app/Contents/MacOS/UpdateWorkbench --render-snapshots /tmp/updateworkbench-snapshots
 ```
 
 ## Available features

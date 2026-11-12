@@ -99,7 +99,7 @@ enum SparkleBackend {
         let fm = FileManager.default
         let original = target.standardizedFileURL
         try requireReplaceable(original)
-        let temporary = fm.temporaryDirectory.appendingPathComponent("UpdateWorkbench-\(UUID().uuidString)", isDirectory: true)
+        let temporary = fm.temporaryDirectory.appendingPathComponent("UpdateWorkbench-\(UUID().uuidString).noindex", isDirectory: true)
         try fm.createDirectory(at: temporary, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: temporary) }
         let guardDelegate = HTTPSOnlyDelegate(maximumBytes: 2_147_483_648)
@@ -144,7 +144,7 @@ enum SparkleBackend {
             try verifyArchiveSignature(payload, signature: release.signature, publicKey: publicKey)
         }
         let fm = FileManager.default
-        let work = fm.temporaryDirectory.appendingPathComponent("UpdateWorkbench-work-\(UUID().uuidString)", isDirectory: true)
+        let work = fm.temporaryDirectory.appendingPathComponent("UpdateWorkbench-work-\(UUID().uuidString).noindex", isDirectory: true)
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: work) }
         return try await Task.detached(priority: .userInitiated) {
@@ -221,8 +221,11 @@ enum SparkleBackend {
         let workspace = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: original, create: true)
         var keepWorkspace = false
         defer { if !keepWorkspace { try? fm.removeItem(at: workspace) } }
-        let staged = workspace.appendingPathComponent(original.lastPathComponent)
-        let previous = workspace.appendingPathComponent("previous-" + original.lastPathComponent)
+        // A `.noindex` folder keeps Spotlight and Launch Services from listing the staged and previous apps.
+        let holding = workspace.appendingPathComponent("staging.noindex", isDirectory: true)
+        try fm.createDirectory(at: holding, withIntermediateDirectories: true)
+        let staged = holding.appendingPathComponent(original.lastPathComponent)
+        let previous = holding.appendingPathComponent("previous-" + original.lastPathComponent)
         try SyncCommand.run("/usr/bin/ditto", [candidate.path, staged.path])
         try verifier.verify(staged)
         guard try verifier.identity(staged).teamID == candidateSigner.teamID else { throw Failure(message: "The staged app failed its signing identity check.") }

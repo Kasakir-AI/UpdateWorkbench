@@ -1,7 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
-mkdir -p .build-cache dist/UpdateWorkbench.app/Contents/MacOS dist/UpdateWorkbench.app/Contents/Resources
+# The app is built in dist.noindex/: Spotlight skips folders ending in .noindex, so development
+# builds never show up in Spotlight or Launchpad next to the installed app.
+APP=dist.noindex/UpdateWorkbench.app
+mkdir -p .build-cache "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # App icon: regenerate only when the generator changes.
 ICON_SCRIPT=Resources/AppIcon/make-icon.swift
 if [ ! -f .build/AppIcon.icns ] || [ "$ICON_SCRIPT" -nt .build/AppIcon.icns ]; then
@@ -9,13 +12,13 @@ if [ ! -f .build/AppIcon.icns ] || [ "$ICON_SCRIPT" -nt .build/AppIcon.icns ]; t
     xcrun swift "$ICON_SCRIPT" .build/AppIcon.iconset Resources/AppIcon/AppIcon-1024.png
     /usr/bin/iconutil -c icns .build/AppIcon.iconset -o .build/AppIcon.icns
 fi
-cp .build/AppIcon.icns dist/UpdateWorkbench.app/Contents/Resources/AppIcon.icns
+cp .build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 export CLANG_MODULE_CACHE_PATH="$PWD/.build-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build-cache"
 swift build --configuration release -debug-info-format none --scratch-path "$PWD/.build" --disable-sandbox
 BIN_DIR="$(swift build --configuration release --scratch-path "$PWD/.build" --disable-sandbox --show-bin-path)"
-cp "$BIN_DIR/UpdateWorkbench" dist/UpdateWorkbench.app/Contents/MacOS/UpdateWorkbench
-cat > dist/UpdateWorkbench.app/Contents/Info.plist <<'PLIST'
+cp "$BIN_DIR/UpdateWorkbench" "$APP/Contents/MacOS/UpdateWorkbench"
+cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -32,5 +35,8 @@ cat > dist/UpdateWorkbench.app/Contents/Info.plist <<'PLIST'
 <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 </dict></plist>
 PLIST
-/usr/bin/codesign --force --sign - dist/UpdateWorkbench.app
-printf 'Built %s/dist/UpdateWorkbench.app\n' "$PWD"
+/usr/bin/codesign --force --sign - "$APP"
+# Make sure Launch Services forgets this copy if anything registered it.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+[ -x "$LSREGISTER" ] && "$LSREGISTER" -u "$PWD/$APP" >/dev/null 2>&1 || true
+printf 'Built %s/%s\n' "$PWD" "$APP"

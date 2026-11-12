@@ -1,9 +1,14 @@
 #!/bin/sh
 set -eu
 cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-test_work_dir="$(mktemp -d "${TMPDIR:-/tmp}/updateworkbench-tests.XXXXXX")"
-trap 'rm -rf "$test_work_dir"' EXIT HUP INT TERM
-mkdir -p "$test_work_dir/module-cache"
+test_root="$(mktemp -d "${TMPDIR:-/tmp}/updateworkbench-tests.XXXXXX")"
+trap 'rm -rf "$test_root"' EXIT HUP INT TERM
+# Normalized path (TMPDIR ends in "/"), so fixture paths compare exactly.
+test_root="$(cd "$test_root" && pwd)"
+# Fixture apps are created under TMPDIR; a .noindex folder keeps them out of Spotlight and Launch Services.
+test_work_dir="$test_root/work.noindex"
+mkdir -p "$test_work_dir/module-cache" "$test_work_dir/tmp"
+export TMPDIR="$test_work_dir/tmp/" UW_TEST_TMP="$test_work_dir/tmp"
 # All backend sources; App.swift and AppServices.swift contain the SwiftUI entry point and UserNotifications calls.
 backend_sources="Sources/UpdateWorkbench/Core.swift
 Sources/UpdateWorkbench/SparkleBackend.swift

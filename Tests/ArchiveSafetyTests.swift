@@ -15,7 +15,7 @@ enum ArchiveSafetyTests {
     static func run() throws {
         try listingRules()
         let fm = FileManager.default
-        let work = fm.temporaryDirectory.appendingPathComponent("archive-safety-\(UUID().uuidString)", isDirectory: true)
+        let work = TestTemp.root.appendingPathComponent("archive-safety-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: work) }
         try fixtures(in: work)

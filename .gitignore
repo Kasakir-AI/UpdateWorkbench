@@ -2,6 +2,7 @@
 .build-cache/
 .swiftpm/
 dist/
+dist.noindex/
 release/
 .DS_Store
 # Local working notes (not published)

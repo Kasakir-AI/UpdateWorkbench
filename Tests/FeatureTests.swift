@@ -107,7 +107,7 @@ enum FeatureTests {
     }
 
     static func testSHA512() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("UWSHA-\(UUID().uuidString)")
+        let directory = TestTemp.root.appendingPathComponent("UWSHA-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("payload.zip")
@@ -203,7 +203,7 @@ enum FeatureTests {
 
     static func testAppRemoval() throws {
         let fm = FileManager.default
-        let root = fm.temporaryDirectory.appendingPathComponent("UWTrash-\(UUID().uuidString)")
+        let root = TestTemp.root.appendingPathComponent("UWTrash-\(UUID().uuidString)")
         let apps = root.appendingPathComponent("Apps"), trash = root.appendingPathComponent("FakeTrash")
         try fm.createDirectory(at: apps.appendingPathComponent("Fixture.app/Contents"), withIntermediateDirectories: true)
         try fm.createDirectory(at: trash, withIntermediateDirectories: true)
@@ -231,7 +231,7 @@ enum FeatureTests {
     }
 
     static func testPermissions() throws {
-        let home = FileManager.default.temporaryDirectory.appendingPathComponent("UWHome-\(UUID().uuidString)")
+        let home = TestTemp.root.appendingPathComponent("UWHome-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
         let candidates = [home.appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db").path, home.appendingPathComponent("Library/Safari").path]
         try expect(PermissionsBackend.probeFullDiskAccess(candidates: candidates) == nil, "Missing probe locations are unknown, not denied")

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Development builds no longer show up in Spotlight or Launchpad next to the installed app. `./build.sh` now builds `dist.noindex/UpdateWorkbench.app` (Spotlight skips folders ending in `.noindex`) and unregisters that copy from Launch Services. `./test.sh` creates its fixture apps and disk images in a temporary `.noindex` folder, and `./make-release.sh` stages the DMG contents in one.
+- Direct installs download, extract and stage update copies in `.noindex` folders, so a half-finished update is never listed in Spotlight.
+
 ## 0.4.0 — 2026-11-12
 
 - **Trusted signer changes.** When an update is signed by a different Developer ID team, the install stops and a sheet shows both teams side by side: signer name, team ID, certificate type and chain, signing time, certificate expiry and SHA-256 fingerprint, plus the codesign, Gatekeeper and bundle ID results. Code signing and Gatekeeper are checked *before* the question is asked, so a broken or rejected download is never offered for approval. Approving needs a confirmation checkbox and covers only that app (bundle ID) and that new team. Approvals are stored with timestamps in `~/Library/Application Support/Update Workbench/trusted-signers.json` (owner-only) and can be reviewed and revoked in Settings → Trust. Nothing is approved automatically, and the app's own self-update never uses approvals.

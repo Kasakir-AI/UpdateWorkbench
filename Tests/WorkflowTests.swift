@@ -1,6 +1,17 @@
 import Combine
 import Foundation
 
+/// Folder for fixture apps and disk images. test.sh points UW_TEST_TMP at a `.noindex` folder so
+/// Spotlight and Launch Services never list test apps; Foundation's temporaryDirectory ignores TMPDIR.
+enum TestTemp {
+    static let root: URL = {
+        if let path = ProcessInfo.processInfo.environment["UW_TEST_TMP"], !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return FileManager.default.temporaryDirectory
+    }()
+}
+
 /// 0.4.0 logic: ignore/skip/pre-release rules, schedules, release-note sanitizing, trusted signers and history.
 enum WorkflowTests {
     struct Failure: Error, CustomStringConvertible { let description: String }
@@ -58,7 +69,7 @@ enum WorkflowTests {
     }
 
     static func temporaryFolder(_ name: String) throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("uw-\(name)-\(UUID().uuidString)", isDirectory: true)
+        let url = TestTemp.root.appendingPathComponent("uw-\(name)-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }

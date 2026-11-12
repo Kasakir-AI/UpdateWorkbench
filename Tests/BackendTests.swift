@@ -71,7 +71,7 @@ struct BackendTests {
     }
 
     private static func testSignatures() throws {
-        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("UpdateWorkbenchTests-\(UUID().uuidString)")
+        let temporary = TestTemp.root.appendingPathComponent("UpdateWorkbenchTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temporary) }
         let archive = temporary.appendingPathComponent("payload.zip")
