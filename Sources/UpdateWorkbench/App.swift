@@ -102,7 +102,7 @@ final class WorkbenchModel: ObservableObject {
         }
     }
     var ignoredItems: [UpdateItem] { items.filter { decision($0) != .show || isSnoozed($0) } }
-    var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? AppIdentity.version }
+    var appVersion: String { AppIdentity.version }
     var suggestions: [UpdateItem] {
         items.filter { item in
             (item.provider == .manual || item.provider == .vendor || (item.provider == .electron && !item.canUpdateDirectly))

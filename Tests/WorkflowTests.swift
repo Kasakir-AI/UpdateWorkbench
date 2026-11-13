@@ -1,14 +1,17 @@
 import Combine
 import Foundation
+@testable import UpdateWorkbench
 
-/// Folder for fixture apps and disk images. test.sh points UW_TEST_TMP at a `.noindex` folder so
-/// Spotlight and Launch Services never list test apps; Foundation's temporaryDirectory ignores TMPDIR.
+/// Folder for fixture apps and disk images, always a `.noindex` folder so Spotlight and Launch Services
+/// never list test apps. test.sh sets UW_TEST_TMP; a plain `swift test` uses one under the temporary directory.
 enum TestTemp {
     static let root: URL = {
         if let path = ProcessInfo.processInfo.environment["UW_TEST_TMP"], !path.isEmpty {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
-        return FileManager.default.temporaryDirectory
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("UpdateWorkbenchTests.noindex", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
     }()
 }
 

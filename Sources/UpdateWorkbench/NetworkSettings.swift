@@ -192,7 +192,8 @@ enum HTTPFetcher {
 }
 
 enum AppIdentity {
-    static let version = "0.4.0"
+    /// Set once in build.sh, which writes it into Info.plist.
+    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
     static let userAgent = "UpdateWorkbench/\(version)"
 }
 

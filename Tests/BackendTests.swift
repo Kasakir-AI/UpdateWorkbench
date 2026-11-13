@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import Foundation
+@testable import UpdateWorkbench
 
 private struct TestFailure: Error, CustomStringConvertible {
     let description: String
@@ -10,15 +11,8 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) thr
     if !condition() { throw TestFailure(description: message) }
 }
 
-@main
-struct BackendTests {
-    static func main() async throws {
-        try GitHubTests.run()
-        try await FeatureTests.run()
-        try PresentationTests.run()
-        try ArchiveSafetyTests.run()
-        try WorkflowTests.run()
-        try await DiskImageTests.run()
+enum BackendTests {
+    static func run() async throws {
         try testHomebrewDestination()
         try testAppcasts()
         try testSignatures()

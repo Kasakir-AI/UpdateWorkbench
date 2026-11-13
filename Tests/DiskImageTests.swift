@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+@testable import UpdateWorkbench
 
 /// Full DMG install path with fixture disk images built by hdiutil in a temporary folder:
 /// good, wrong team, approved team, multiple apps, broken signature, version mismatch, license agreement,

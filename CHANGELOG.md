@@ -1,9 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 — 2026-11-13
 
 - Development builds no longer show up in Spotlight or Launchpad next to the installed app. `./build.sh` now builds `dist.noindex/UpdateWorkbench.app` (Spotlight skips folders ending in `.noindex`) and unregisters that copy from Launch Services. `./test.sh` creates its fixture apps and disk images in a temporary `.noindex` folder, and `./make-release.sh` stages the DMG contents in one.
 - Direct installs download, extract and stage update copies in `.noindex` folders, so a half-finished update is never listed in Spotlight.
+- Fixed version comparison. Versions were compared as text with numbers sorted numerically, so someone on a beta such as `1.0-beta.1` was never offered `1.0`, and `2.0.0` counted as newer than `2.0` (a "new" version that was the same one). Missing components now count as zero, pre-releases (`-beta.1`, `b2`, `rc1`, Preview, ...) come before their release, a trailing build such as `1.0 (45)` comes after it, and a leading `v` and `+build` metadata are ignored. The same order is used for feeds, GitHub and Electron releases, build numbers and minimum macOS versions.
+- When GitHub's limit of 60 unauthenticated API requests an hour is reached, the message says so and gives the time it resets.
+- Tests now run with `swift test` (Swift Testing) through a test target in `Package.swift`; `./test.sh` wraps it and passes extra arguments through. GitHub Actions runs the tests and a release build on every push to `main` and on pull requests.
+- The version and build number are set once in `build.sh`; the app reads its version from `Info.plist`.
+- The Sparkle, Electron and GitHub checks share one batching helper instead of three copies.
+- Version 0.4.1 (build 7).
 
 ## 0.4.0 — 2026-11-12
 

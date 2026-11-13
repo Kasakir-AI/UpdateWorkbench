@@ -21,7 +21,8 @@ These notes record what has been built, tested and observed on the development M
 - 0.4.0: `mas` 7.0.0 was installed with Homebrew on the development Mac at the user's request. `mas outdated --json` (read-only) reported no pending App Store updates for the 26 App Store apps `mas list` found; App Store lookups were intermittent: about half of the runs, in any environment, ended after roughly 60 seconds with a lookup timeout, exit status 1 and no results. The app reports this as a temporary App Store connection problem, and the App Store items say the check could not finish, rather than claiming that mas is missing. No `mas update` was run.
 - 0.4.0: the new screens were rendered offscreen in dark and light and reviewed. The menu bar status item itself can't be captured offscreen; its panel was rendered.
 
-- Unreleased: builds moved to `dist.noindex/`, and test fixtures and release staging moved to temporary `.noindex` folders. After a build and a full test run, `mdfind "kMDItemCFBundleIdentifier == 'local.updateworkbench.app'"` listed only the installed copy in `/Applications`.
+- 0.4.1: builds moved to `dist.noindex/`, and test fixtures and release staging moved to temporary `.noindex` folders. After a build and a full test run, `mdfind "kMDItemCFBundleIdentifier == 'local.updateworkbench.app'"` listed only the installed copy in `/Applications`.
+- 0.4.1: `swift test` runs the offline suites (wrapped in Swift Testing, run one after another) plus new tests for version ordering and the GitHub rate-limit message; all 13 tests passed. GitHub was checked live with `curl`: a conditional request answered `304 Not Modified` still lowered `x-ratelimit-remaining` without a token, so ETag caching would not ease the unauthenticated limit and wasn't added. A release build reported its version and build in `Info.plist` and in the rendered sidebar.
 
 ## Not validated end to end
 

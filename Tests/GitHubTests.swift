@@ -1,4 +1,5 @@
 import Foundation
+@testable import UpdateWorkbench
 
 /// Offline fixtures; invoke run() from the repository's backend test entry point.
 enum GitHubTests {

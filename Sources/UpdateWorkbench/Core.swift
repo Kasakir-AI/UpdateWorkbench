@@ -249,105 +249,90 @@ actor Engine {
             diagnostics.append("App Store apps aren't checked because mas isn't installed. Choose Homebrew → Install mas… (or run `brew install mas`), then check again.")
         }
         // Keep requests bounded and preserve failures as unknown, never as up-to-date.
-        let feedIndices = items.indices.filter { items[$0].provider == .sparkle && items[$0].feedURL != nil }
-        for start in stride(from: 0, to: feedIndices.count, by: 6) {
-            let batch = feedIndices[start..<min(start + 6, feedIndices.count)].map {
-                ($0, items[$0].feedURL!, items[$0].installedVersion, rules.allowsPrereleases(for: items[$0].id))
-            }
-            let results = await withTaskGroup(of: (Int, SparkleRelease?, String?).self) { group in
-                for (index, feed, version, prerelease) in batch {
-                    group.addTask {
-                        do { return (index, try await SparkleBackend.check(feedURL: feed, installedVersion: version, allowPrerelease: prerelease), nil) }
-                        catch { return (index, nil, error.localizedDescription) }
-                    }
-                }
-                var values: [(Int, SparkleRelease?, String?)] = []
-                for await value in group { values.append(value) }
-                return values
-            }
-            for (index, release, error) in results {
-                if let error {
-                    items[index].detail = "Feed check failed: \(error)"
-                    diagnostics.append("\(items[index].name): \(error)")
-                } else if let release {
-                    items[index].latestVersion = release.version
-                    items[index].sparkleRelease = release
-                    items[index].isOutdated = true
-                    items[index].detail = "Update available from the app's Sparkle feed. Installation verifies bundle identity and signing team."
-                } else { items[index].detail = "No compatible newer release found in the Sparkle feed." }
-            }
+        let feeds = items.indices.compactMap { index in
+            items[index].provider == .sparkle ? items[index].feedURL.map { (index, $0, items[index].installedVersion, rules.allowsPrereleases(for: items[index].id)) } : nil
+        }
+        for (index, release, error) in await Self.checkInBatches(feeds, { feed, version, prerelease in
+            try await SparkleBackend.check(feedURL: feed, installedVersion: version, allowPrerelease: prerelease)
+        }) {
+            if let error {
+                items[index].detail = "Feed check failed: \(error)"
+                diagnostics.append("\(items[index].name): \(error)")
+            } else if let release {
+                items[index].latestVersion = release.version
+                items[index].sparkleRelease = release
+                items[index].isOutdated = true
+                items[index].detail = "Update available from the app's Sparkle feed. Installation verifies bundle identity and signing team."
+            } else { items[index].detail = "No compatible newer release found in the Sparkle feed." }
         }
         // Electron apps that publicly declare an electron-updater feed in app-update.yml.
-        let electronIndices = items.indices.filter { items[$0].provider == .electron && items[$0].electronUpdate != nil }
-        for start in stride(from: 0, to: electronIndices.count, by: 6) {
-            let batch = electronIndices[start..<min(start + 6, electronIndices.count)].map {
-                ($0, items[$0].electronUpdate!, items[$0].installedVersion, rules.allowsPrereleases(for: items[$0].id))
-            }
-            let results = await withTaskGroup(of: (Int, ElectronCheckResult?, String?).self) { group in
-                for (index, config, version, prerelease) in batch {
-                    group.addTask {
-                        do { return (index, try await ElectronBackend.check(config: config, installedVersion: version, allowPrerelease: prerelease), nil) }
-                        catch { return (index, nil, error.localizedDescription) }
-                    }
-                }
-                var values: [(Int, ElectronCheckResult?, String?)] = []
-                for await value in group { values.append(value) }
-                return values
-            }
-            for (index, result, error) in results {
-                if let error {
-                    items[index].detail = "Electron update check failed: \(error)"
-                    diagnostics.append("\(items[index].name): \(error)")
-                } else if let result {
-                    items[index].latestVersion = result.version
-                    items[index].sparkleRelease = result.release
-                    items[index].isOutdated = true
-                    if let page = result.releasePage { items[index].homepage = page }
-                    items[index].detail = items[index].requiresSparkleSignature == true
-                        ? "Electron update available. This app requires a Sparkle archive signature; use its own updater." : result.note
-                } else { items[index].detail = "No newer stable release found in the app's Electron update feed." }
-            }
+        let electronFeeds = items.indices.compactMap { index in
+            items[index].provider == .electron ? items[index].electronUpdate.map { (index, $0, items[index].installedVersion, rules.allowsPrereleases(for: items[index].id)) } : nil
+        }
+        for (index, result, error) in await Self.checkInBatches(electronFeeds, { config, version, prerelease in
+            try await ElectronBackend.check(config: config, installedVersion: version, allowPrerelease: prerelease)
+        }) {
+            if let error {
+                items[index].detail = "Electron update check failed: \(error)"
+                diagnostics.append("\(items[index].name): \(error)")
+            } else if let result {
+                items[index].latestVersion = result.version
+                items[index].sparkleRelease = result.release
+                items[index].isOutdated = true
+                if let page = result.releasePage { items[index].homepage = page }
+                items[index].detail = items[index].requiresSparkleSignature == true
+                    ? "Electron update available. This app requires a Sparkle archive signature; use its own updater." : result.note
+            } else { items[index].detail = "No newer stable release found in the app's Electron update feed." }
         }
         // Explicit GitHub repositories supplement apps without a package-manager route.
-        let githubIndices = items.indices.filter { items[$0].provider == .github && items[$0].githubRepository != nil }
-        for start in stride(from: 0, to: githubIndices.count, by: 6) {
-            let batch = githubIndices[start..<min(start + 6, githubIndices.count)].map {
-                ($0, items[$0].githubRepository!, items[$0].installedVersion, rules.allowsPrereleases(for: items[$0].id))
-            }
-            let results = await withTaskGroup(of: (Int, GitHubRelease?, String?).self) { group in
-                for (index, repository, version, prerelease) in batch {
-                    group.addTask {
-                        do { return (index, try await GitHubBackend.check(repository: repository, installedVersion: version, allowPrerelease: prerelease), nil) }
-                        catch { return (index, nil, error.localizedDescription) }
-                    }
+        let repositories = items.indices.compactMap { index in
+            items[index].provider == .github ? items[index].githubRepository.map { (index, $0, items[index].installedVersion, rules.allowsPrereleases(for: items[index].id)) } : nil
+        }
+        for (index, release, error) in await Self.checkInBatches(repositories, { repository, version, prerelease in
+            try await GitHubBackend.check(repository: repository, installedVersion: version, allowPrerelease: prerelease)
+        }) {
+            if let error {
+                items[index].detail = "GitHub check failed: \(error)"
+                diagnostics.append("\(items[index].name): \(error)")
+            } else if let release {
+                items[index].latestVersion = release.version
+                items[index].githubRelease = release
+                items[index].homepage = release.releasePageURL
+                items[index].isOutdated = true
+                if items[index].requiresSparkleSignature == true {
+                    items[index].detail = "GitHub release available. This app requires a Sparkle archive signature; use its signed feed or vendor updater."
+                } else if release.downloadURL == nil {
+                    items[index].detail = "GitHub release available. No single clearly native macOS payload was identified; choose a download on the release page."
+                } else {
+                    items[index].detail = "GitHub release available from your configured repository. Direct installation verifies the app bundle, signing team, Gatekeeper, version and native CPU."
                 }
-                var values: [(Int, GitHubRelease?, String?)] = []
-                for await value in group { values.append(value) }
-                return values
-            }
-            for (index, release, error) in results {
-                if let error {
-                    items[index].detail = "GitHub check failed: \(error)"
-                    diagnostics.append("\(items[index].name): \(error)")
-                } else if let release {
-                    items[index].latestVersion = release.version
-                    items[index].githubRelease = release
-                    items[index].homepage = release.releasePageURL
-                    items[index].isOutdated = true
-                    if items[index].requiresSparkleSignature == true {
-                        items[index].detail = "GitHub release available. This app requires a Sparkle archive signature; use its signed feed or vendor updater."
-                    } else if release.downloadURL == nil {
-                        items[index].detail = "GitHub release available. No single clearly native macOS payload was identified; choose a download on the release page."
-                    } else {
-                        items[index].detail = "GitHub release available from your configured repository. Direct installation verifies the app bundle, signing team, Gatekeeper, version and native CPU."
-                    }
-                } else { items[index].detail = "No newer stable GitHub release found." }
-            }
+            } else { items[index].detail = "No newer stable GitHub release found." }
         }
         return items.sorted {
             if $0.isOutdated != $1.isOutdated { return $0.isOutdated }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
+    }
+
+    /// Runs one source's checks six at a time. Each result carries the item index and either the
+    /// check's value (nil when nothing newer was found) or the error text.
+    private static func checkInBatches<Source: Sendable, Value: Sendable>(
+        _ checks: [(Int, Source, String, Bool)],
+        _ check: @escaping @Sendable (Source, String, Bool) async throws -> Value?
+    ) async -> [(Int, Value?, String?)] {
+        var results: [(Int, Value?, String?)] = []
+        for start in stride(from: 0, to: checks.count, by: 6) {
+            await withTaskGroup(of: (Int, Value?, String?).self) { group in
+                for (index, source, version, prerelease) in checks[start..<min(start + 6, checks.count)] {
+                    group.addTask {
+                        do { return (index, try await check(source, version, prerelease), nil) }
+                        catch { return (index, nil, error.localizedDescription) }
+                    }
+                }
+                for await value in group { results.append(value) }
+            }
+        }
+        return results
     }
 
     func update(_ item: UpdateItem, options: InstallOptions = InstallOptions()) async throws -> UpdateOutcome {

@@ -56,7 +56,7 @@ enum SparkleBackend {
     }
 
     static func isNewer(_ candidate: String, than installed: String) -> Bool {
-        candidate.compare(installed, options: [.numeric, .caseInsensitive]) == .orderedDescending
+        VersionOrder.compare(candidate, installed) == .orderedDescending
     }
 
     static func check(feedURL: URL, installedVersion: String, allowPrerelease: Bool = false) async throws -> SparkleRelease? {
@@ -196,12 +196,12 @@ enum SparkleBackend {
                 throw Failure(message: "The downloaded app requires a newer version of macOS.")
             }
         }
-        guard release.version == newVersion || release.version == newBuild else {
+        guard VersionOrder.isSame(release.version, newVersion) || release.version == newBuild else {
             throw Failure(message: "The downloaded app version (\(newVersion)) does not match the selected update (\(release.version)).")
         }
         let oldVersion = oldInfo["CFBundleShortVersionString"] as? String ?? ""
         let oldBuild = oldInfo["CFBundleVersion"] as? String ?? ""
-        guard isNewer(newVersion, than: oldVersion) || (newVersion == oldVersion && isNewer(newBuild, than: oldBuild)) else {
+        guard isNewer(newVersion, than: oldVersion) || (VersionOrder.isSame(newVersion, oldVersion) && isNewer(newBuild, than: oldBuild)) else {
             throw Failure(message: "The downloaded app is not newer than the installed app.")
         }
         try verifier.verify(original)

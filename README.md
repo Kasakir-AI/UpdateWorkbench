@@ -10,7 +10,7 @@ Update Workbench is a native macOS app that finds and installs updates for your 
 
 Requires macOS 14 or newer on Apple silicon. Check the download against `SHA256SUMS` with `shasum -a 256 -c SHA256SUMS`.
 
-**Upgrading from 0.3.x:** quit Update Workbench, drag the new version into Applications and choose **Replace**. Settings, rules and approvals are kept. You may need the right-click **Open** step once more.
+**Upgrading from an earlier version:** quit Update Workbench, drag the new version into Applications and choose **Replace**. Settings, rules and approvals are kept. You may need the right-click **Open** step once more.
 
 **App Store updates (optional):** install the free `mas` tool with **Homebrew → Install mas…** (or `brew install mas` in Terminal) and stay signed in to the App Store app. When mas needs your Mac password to install an App Store update, click **Finish in Terminal** and type the password there. Update Workbench never sees it. You can also click **Open App Store Updates** and update in the App Store app.
 
@@ -20,11 +20,20 @@ Requires Xcode command-line tools.
 
 ```sh
 ./build.sh   # builds dist.noindex/UpdateWorkbench.app (ad-hoc signed)
-./test.sh    # offline test suite
+./test.sh    # offline test suite (swift test); extra arguments go to swift test, e.g. --filter VersionOrderTests
 ./make-release.sh   # DMG, ZIP and SHA256SUMS in release/
 ```
 
+The version and build number are set once, at the top of `build.sh`. GitHub Actions runs `./test.sh` and `./build.sh` on every push to `main` and on pull requests.
+
 Builds go to `dist.noindex/`. Spotlight skips folders whose names end in `.noindex`, so development builds, test fixtures and release staging never appear in Spotlight or Launchpad next to the copy in Applications.
+
+## New in 0.4.1
+
+- **Betas move on to the final release.** If you run a beta such as `1.0-beta.1`, the finished `1.0` is now offered. Before, it wasn't.
+- **No more fake updates.** The same version written two ways (`2.0` and `2.0.0`) is no longer shown as an update.
+- **Clearer GitHub limit message.** GitHub allows 60 checks an hour without an account. When that's reached, the app now says so and tells you when it resets.
+- **Test copies stay out of Spotlight.** Development builds, test apps and half-finished updates are kept in folders Spotlight skips, so only the app in Applications shows up.
 
 ## New in 0.4.0
 
@@ -78,6 +87,8 @@ To render every screen yourself in dark and light (fake data, no scanning, nothi
 ./build.sh
 dist.noindex/UpdateWorkbench.app/Contents/MacOS/UpdateWorkbench --render-snapshots /tmp/updateworkbench-snapshots
 ```
+
+Running the app from `dist.noindex/` registers that copy with Launch Services again. Run `./build.sh` afterwards, or `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u dist.noindex/UpdateWorkbench.app`, so it doesn't appear next to the installed app.
 
 ## Available features
 

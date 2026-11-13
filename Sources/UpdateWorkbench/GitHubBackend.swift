@@ -79,13 +79,26 @@ enum GitHubBackend {
         defer { try? FileManager.default.removeItem(at: file) }
         guard let http = response as? HTTPURLResponse else { throw Failure(message: "GitHub did not return an HTTP response.") }
         guard http.statusCode == 200 else {
-            if http.statusCode == 403 || http.statusCode == 429 { throw Failure(message: "GitHub rate-limited this check. Try again later; private repositories are unsupported.") }
+            if http.statusCode == 403 || http.statusCode == 429 { throw Failure(message: rateLimitMessage(http)) }
             if http.statusCode == 404 { throw Failure(message: "No public latest release was found for \(repository). Check the repository setting.") }
             throw Failure(message: "GitHub release check returned HTTP \(http.statusCode).")
         }
         let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
         guard size <= GitHubResponseGuard.maximumBytes else { throw Failure(message: "GitHub release metadata exceeds 8 MB.") }
         return try Data(contentsOf: file)
+    }
+
+    /// GitHub allows 60 unauthenticated API requests an hour per IP address. Conditional requests
+    /// don't help: without a token, a `304 Not Modified` answer counts against the limit too.
+    static func rateLimitMessage(_ response: HTTPURLResponse) -> String {
+        guard response.value(forHTTPHeaderField: "x-ratelimit-remaining") == "0" || response.statusCode == 429 else {
+            return "GitHub refused this check (HTTP \(response.statusCode)). Private repositories are unsupported."
+        }
+        guard let reset = response.value(forHTTPHeaderField: "x-ratelimit-reset").flatMap(TimeInterval.init) else {
+            return "GitHub's limit of 60 checks an hour was reached. Try again later."
+        }
+        let time = Date(timeIntervalSince1970: reset).formatted(date: .omitted, time: .shortened)
+        return "GitHub's limit of 60 checks an hour was reached. It resets at \(time)."
     }
 
     static func parseRelease(_ data: Data, repository: String, installedVersion: String,

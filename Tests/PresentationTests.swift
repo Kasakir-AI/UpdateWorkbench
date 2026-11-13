@@ -1,4 +1,5 @@
 import Foundation
+@testable import UpdateWorkbench
 
 /// Offline checks for the UI presentation rules (status precedence, hero copy, appearance default, path abbreviation).
 enum PresentationTests {

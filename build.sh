@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")"
+# The one place the version is set. The app reads it back from Info.plist at runtime.
+VERSION=0.4.1
+BUILD=7
 # The app is built in dist.noindex/: Spotlight skips folders ending in .noindex, so development
 # builds never show up in Spotlight or Launchpad next to the installed app.
 APP=dist.noindex/UpdateWorkbench.app
@@ -18,7 +21,7 @@ export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build-cache"
 swift build --configuration release -debug-info-format none --scratch-path "$PWD/.build" --disable-sandbox
 BIN_DIR="$(swift build --configuration release --scratch-path "$PWD/.build" --disable-sandbox --show-bin-path)"
 cp "$BIN_DIR/UpdateWorkbench" "$APP/Contents/MacOS/UpdateWorkbench"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -27,8 +30,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Update Workbench</string>
 <key>CFBundleDisplayName</key><string>Update Workbench</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.4.0</string>
-<key>CFBundleVersion</key><string>6</string>
+<key>CFBundleShortVersionString</key><string>$VERSION</string>
+<key>CFBundleVersion</key><string>$BUILD</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>

@@ -2,6 +2,7 @@ import CFNetwork
 import CryptoKit
 import Foundation
 import Security
+@testable import UpdateWorkbench
 
 /// Offline fixtures for Electron feeds, discovery, cask matching, management flows, permissions,
 /// notifications, proxy/Keychain and self-update. No network, brew, or real app changes.

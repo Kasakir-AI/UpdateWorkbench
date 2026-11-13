@@ -1,4 +1,5 @@
 import Foundation
+@testable import UpdateWorkbench
 
 /// Symlink-aware ZIP validation: fixture archives are built in a temporary folder with /usr/bin/zip and ditto.
 enum ArchiveSafetyTests {
