@@ -211,56 +211,31 @@ enum UpdateNotificationPolicy {
     }
 }
 
-/// Where Update Workbench looks for its own releases. Disabled by default; there is no published feed.
-enum SelfUpdateFeed: Equatable, Sendable {
-    case disabled
-    case github(String)
-    case appcast(URL)
-
-    static let defaultsKey = "selfUpdateFeed"
-
-    static func parse(_ raw: String) throws -> SelfUpdateFeed {
-        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.isEmpty { return .disabled }
-        if value.lowercased().hasPrefix("github:") {
-            let repository = String(value.dropFirst("github:".count))
-            guard GitHubBackend.validRepository(repository) else { throw UpdateError.unavailable("Use github:owner/repository.") }
-            return .github(repository)
-        }
-        guard let url = URL(string: value), HTTPFetcher.isSafeHTTPS(url) else {
-            throw UpdateError.unavailable("Enter github:owner/repository, a GitHub repository URL, or an HTTPS appcast URL.")
-        }
-        if url.host?.lowercased() == "github.com" {
-            let parts = url.path.split(separator: "/")
-            guard parts.count == 2, GitHubBackend.validRepository("\(parts[0])/\(parts[1])") else {
-                throw UpdateError.unavailable("Use the repository URL, for example https://github.com/owner/repository.")
-            }
-            return .github("\(parts[0])/\(parts[1])")
-        }
-        return .appcast(url)
-    }
-
-    var description: String {
-        switch self {
-        case .disabled: return "Disabled"
-        case .github(let repository): return "GitHub Releases: \(repository)"
-        case .appcast(let url): return "Appcast: \(url.absoluteString)"
-        }
-    }
-}
-
+/// Update Workbench's own releases. Every GitHub release carries `appcast.xml`, a Sparkle feed whose archive is
+/// signed with the release key; build.sh writes the feed address (SUFeedURL) and the key's public half
+/// (SUPublicEDKey) into Info.plist. The app has no Developer ID team, so that key is what proves an update is genuine.
 enum SelfUpdate {
-    /// Checks the configured feed; returns a release only when a single verifiable payload exists.
-    static func check(_ feed: SelfUpdateFeed, installedVersion: String) async throws -> SparkleRelease? {
-        switch feed {
-        case .disabled: throw UpdateError.unavailable("Self-update is disabled. Configure a release feed first.")
-        case .appcast(let url): return try await SparkleBackend.check(feedURL: url, installedVersion: installedVersion)
-        case .github(let repository):
-            guard let release = try await GitHubBackend.check(repository: repository, installedVersion: installedVersion) else { return nil }
-            guard let download = release.downloadURL else {
-                throw UpdateError.unavailable("Version \(release.version) is available, but no single native macOS ZIP/DMG was found: \(release.releasePageURL.absoluteString)")
-            }
-            return SparkleRelease(version: release.version, downloadURL: download, releaseNotesURL: release.releasePageURL)
-        }
+    static let caskToken = "update-workbench"
+    static let caskrooms = ["/opt/homebrew/Caskroom", "/usr/local/Caskroom"]
+
+    static var feedURL: URL? {
+        (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String).flatMap(URL.init(string:)).flatMap { HTTPFetcher.isSafeHTTPS($0) ? $0 : nil }
+    }
+
+    /// Whether Homebrew installed this copy (the cask has a Caskroom folder).
+    static func installedWithHomebrew(exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Bool {
+        caskrooms.contains { exists("\($0)/\(caskToken)") }
+    }
+
+    /// The running app as a list entry, for "Check for Updates…" before any scan. The version is read from disk,
+    /// so an update installed but not yet relaunched counts as installed.
+    static func currentItem(bundle: URL = Bundle.main.bundleURL, homebrew: Bool = installedWithHomebrew()) -> UpdateItem {
+        let info = AppBundleInfo.read(bundle)
+        let version = info["CFBundleShortVersionString"] as? String ?? AppIdentity.version
+        return UpdateItem(id: bundle.resolvingSymlinksInPath().path, name: info["CFBundleDisplayName"] as? String ?? "Update Workbench",
+                          bundleID: info["CFBundleIdentifier"] as? String, path: bundle.path, installedVersion: version,
+                          provider: homebrew ? .homebrewCask : .sparkle, token: homebrew ? caskToken : nil, feedURL: feedURL,
+                          detail: homebrew ? "Installed with Homebrew from the kasakir-ai/tap tap." : "Update Workbench checks its own signed releases.",
+                          requiresSparkleSignature: info["SUPublicEDKey"] is String)
     }
 }

@@ -66,6 +66,14 @@ struct UpdateItem: Identifiable, Codable, Sendable, Hashable {
         }
     }
 
+    /// This entry is the running copy of Update Workbench. It is updated in place and relaunched, so the
+    /// usual "quit the app first" rule doesn't apply.
+    var isSelf: Bool {
+        guard let path else { return false }
+        return URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+            == Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
     /// Sanitized notes for the available version, from the feed or the GitHub release body.
     var releaseNotes: String? { isOutdated ? (sparkleRelease?.notes ?? githubRelease?.notes) : nil }
     /// HTTPS notes page (Sparkle `releaseNotesLink`) that can be fetched on demand.
@@ -308,9 +316,40 @@ actor Engine {
                 }
             } else { items[index].detail = "No newer stable GitHub release found." }
         }
+        await describeSelf(&items, rules: rules)
         return items.sorted {
             if $0.isOutdated != $1.isOutdated { return $0.isOutdated }
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    /// Update Workbench's own entry. Direct installs come from its signed feed (checked above like any Sparkle app).
+    /// A copy installed with Homebrew is updated through its cask, but the scan doesn't refresh taps, so the
+    /// signed feed tells whether a newer version exists.
+    private func describeSelf(_ items: inout [UpdateItem], rules: UpdateRules) async {
+        guard let index = items.firstIndex(where: \.isSelf) else { return }
+        switch items[index].provider {
+        case .sparkle:
+            if items[index].isOutdated {
+                items[index].detail = "A new version of Update Workbench is available. The download must carry the release signature of Update Workbench's own update key; it replaces this copy and Update Workbench relaunches."
+            } else if !items[index].detail.hasPrefix("Feed check failed") {
+                items[index].detail = "Update Workbench checks its own signed releases with every check."
+            }
+        case .homebrewCask:
+            if !items[index].isOutdated, let feed = items[index].feedURL {
+                do {
+                    if let release = try await SparkleBackend.check(feedURL: feed, installedVersion: items[index].installedVersion,
+                                                                    allowPrerelease: rules.allowsPrereleases(for: items[index].id)) {
+                        items[index].latestVersion = release.version
+                        items[index].sparkleRelease = release
+                        items[index].isOutdated = true
+                    }
+                } catch { diagnostics.append("Update Workbench: \(error.localizedDescription)") }
+            }
+            items[index].detail = items[index].isOutdated
+                ? "Installed with Homebrew, so Homebrew installs the new version (brew update, then brew upgrade). Update Workbench relaunches afterwards."
+                : "Installed with Homebrew from the kasakir-ai/tap tap."
+        default: break
         }
     }
 
@@ -337,14 +376,15 @@ actor Engine {
 
     func update(_ item: UpdateItem, options: InstallOptions = InstallOptions()) async throws -> UpdateOutcome {
         guard item.canUpdateDirectly else { throw UpdateError.unavailable("No verified direct update is available for \(item.name).") }
-        if let bundleID = item.bundleID,
+        let isSelf = item.isSelf
+        if !isSelf, let bundleID = item.bundleID,
            !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
             throw UpdateError.unavailable("Quit \(item.name) before updating it, then try again.")
         }
         var options = options
         options.appName = options.appName ?? item.name
         func direct(_ release: SparkleRelease, _ path: String) async throws -> UpdateOutcome {
-            let outcome = try await SparkleBackend.install(release: release, target: URL(fileURLWithPath: path), options: options)
+            let outcome = try await SparkleBackend.install(release: release, target: URL(fileURLWithPath: path), replacingRunningSelf: isSelf, options: options)
             return UpdateOutcome(message: outcome.message, installedVersion: outcome.installedVersion)
         }
         switch item.provider {
@@ -353,7 +393,11 @@ actor Engine {
                 throw UpdateError.unavailable("Homebrew or the package identifier is unavailable.")
             }
             let args = try Self.homebrewArguments(for: item)
-            return UpdateOutcome(message: try await execute(brewPath, args))
+            // Update Workbench's own cask lives in a tap; refresh it so Homebrew knows the new version.
+            if isSelf, let refresh = try? await CommandRunner.run(brewPath, ["update"], timeout: 600), refresh.status != 0 {
+                diagnostics.append("brew update: \(refresh.errorOutput.prefix(500))")
+            }
+            return UpdateOutcome(message: try await execute(brewPath, args), installedVersion: isSelf ? item.latestVersion : nil)
         case .appStore:
             guard let masPath else { throw UpdateError.unavailable("mas isn't installed. Choose Homebrew → Install mas…, or update the app in the App Store.") }
             guard let token = item.token, AppStoreCLI.validID(token) else { throw UpdateError.unavailable("The App Store ID for this app is unknown. Check for updates again.") }

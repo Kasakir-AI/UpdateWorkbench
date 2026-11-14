@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 # The one place the version is set. The app reads it back from Info.plist at runtime.
-VERSION=0.4.1
-BUILD=7
+VERSION=0.5.0
+BUILD=8
 # The app is built in dist.noindex/: Spotlight skips folders ending in .noindex, so development
 # builds never show up in Spotlight or Launchpad next to the installed app.
 APP=dist.noindex/UpdateWorkbench.app
@@ -21,6 +21,9 @@ export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build-cache"
 swift build --configuration release -debug-info-format none --scratch-path "$PWD/.build" --disable-sandbox
 BIN_DIR="$(swift build --configuration release --scratch-path "$PWD/.build" --disable-sandbox --show-bin-path)"
 cp "$BIN_DIR/UpdateWorkbench" "$APP/Contents/MacOS/UpdateWorkbench"
+# Self-update: the signed release feed and the public half of the release key (tools/release-key.swift).
+FEED_URL=https://github.com/Kasakir-AI/UpdateWorkbench/releases/latest/download/appcast.xml
+PUBLIC_KEY="$(tr -d '[:space:]' < Resources/release-public-key.txt)"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -36,6 +39,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+<key>SUFeedURL</key><string>$FEED_URL</string>
+<key>SUPublicEDKey</key><string>$PUBLIC_KEY</string>
 </dict></plist>
 PLIST
 /usr/bin/codesign --force --sign - "$APP"

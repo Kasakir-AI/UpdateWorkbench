@@ -4,13 +4,23 @@ Update Workbench is a native macOS app that finds and installs updates for your 
 
 ## Install
 
+**With Homebrew:**
+
+```sh
+brew install --cask kasakir-ai/tap/update-workbench
+```
+
+Homebrew then keeps it up to date (`brew upgrade`), and Update Workbench updates itself through Homebrew too.
+
+**Or download it:**
+
 1. Download the latest `UpdateWorkbench-<version>.dmg` (or the `.zip`) from the [Releases page](https://github.com/Kasakir-AI/UpdateWorkbench/releases).
 2. Open the DMG and drag **Update Workbench** into **Applications**.
 3. **First launch:** the app is ad-hoc signed and not notarized by Apple, so macOS blocks a normal double-click the first time. Right-click (or Control-click) the app in Applications and choose **Open**, then **Open** again. Or try to open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. After that it opens normally.
 
 Requires macOS 14 or newer on Apple silicon. Check the download against `SHA256SUMS` with `shasum -a 256 -c SHA256SUMS`.
 
-**Upgrading from an earlier version:** quit Update Workbench, drag the new version into Applications and choose **Replace**. Settings, rules and approvals are kept. You may need the right-click **Open** step once more.
+**Updating:** from 0.5.0 on, Update Workbench updates itself. Choose **Update Workbench → Check for Updates…** (every check also looks), then **Update and Relaunch**. A copy installed with Homebrew is updated through Homebrew; a downloaded copy installs the new release only if it carries the developer's release signature. To move from 0.4.x to 0.5.0, quit Update Workbench, drag the new version into Applications and choose **Replace** (settings, rules and approvals are kept); you may need the right-click **Open** step once more.
 
 **App Store updates (optional):** install the free `mas` tool with **Homebrew → Install mas…** (or `brew install mas` in Terminal) and stay signed in to the App Store app. When mas needs your Mac password to install an App Store update, click **Finish in Terminal** and type the password there. Update Workbench never sees it. You can also click **Open App Store Updates** and update in the App Store app.
 
@@ -21,12 +31,22 @@ Requires Xcode command-line tools.
 ```sh
 ./build.sh   # builds dist.noindex/UpdateWorkbench.app (ad-hoc signed)
 ./test.sh    # offline test suite (swift test); extra arguments go to swift test, e.g. --filter VersionOrderTests
-./make-release.sh   # DMG, ZIP and SHA256SUMS in release/
+./make-release.sh   # DMG, ZIP, SHA256SUMS and the signed appcast.xml in release/
 ```
+
+Releases are signed with an Ed25519 release key kept in the developer's login Keychain (`xcrun swift tools/release-key.swift generate | public-key | sign FILE`). Only its public half is in the repository (`Resources/release-public-key.txt`); `build.sh` writes it into Info.plist as `SUPublicEDKey`, together with the feed address `SUFeedURL`. A build made with a different key can't update copies made with this one.
 
 The version and build number are set once, at the top of `build.sh`. GitHub Actions runs `./test.sh` and `./build.sh` on every push to `main` and on pull requests.
 
 Builds go to `dist.noindex/`. Spotlight skips folders whose names end in `.noindex`, so development builds, test fixtures and release staging never appear in Spotlight or Launchpad next to the copy in Applications.
+
+## New in 0.5.0
+
+- **Updates itself.** Update Workbench checks for its own new versions with every check and from **Update Workbench → Check for Updates…**. **Update and Relaunch** installs the new version and restarts the app. Each release is signed with the developer's release key, and a download without that signature is never installed.
+- **Install with Homebrew.** `brew install --cask kasakir-ai/tap/update-workbench`. When Homebrew installed it, Update Workbench updates itself through Homebrew.
+- **A softer look.** Pastel colors throughout, in light and dark mode: the update summary, source and status badges, app tiles, the sidebar, cards and sheets.
+- **Right-click an app** in any list to update, skip, snooze, ignore, open or show it in Finder.
+- **Fixes.** Approving a new developer signature or accepting a license agreement right after an update now retries the install (it used to do nothing while the follow-up check ran). The History badge counts only apps whose last update failed, so it clears after a successful retry. Relaunching no longer quits the app if the new copy can't be opened.
 
 ## New in 0.4.1
 
@@ -80,6 +100,8 @@ Rendered with fictional apps and the built-in snapshot harness. They show no rea
 | ![Signer approval sheet](docs/screenshots/signer-approval-dark.png) | ![Rules settings](docs/screenshots/settings-rules-dark.png) |
 | **Menu bar** | **Settings → Trust** |
 | ![Menu bar panel](docs/screenshots/menubar-dark.png) | ![Trust settings](docs/screenshots/settings-trust-dark.png) |
+| **Update Workbench updates itself** | **Settings → Updates** |
+| ![Self-update banner](docs/screenshots/self-update-light.png) | ![Update Workbench update settings](docs/screenshots/settings-updates-light.png) |
 
 To render every screen yourself in dark and light (fake data, no scanning, nothing installed, real settings untouched):
 
@@ -104,7 +126,7 @@ Running the app from `dist.noindex/` registers that copy with Launch Services ag
 - **Permissions view:** read-only status for Full Disk Access (heuristic), App Management (no public query; guidance only), Automation (not used), notifications, administrator account, write access to each application folder, launch at login and Keychain, with System Settings links.
 - **Proxy settings:** system, none or manual HTTP/HTTPS or SOCKS proxy for the app's own requests. Authentication passwords are stored only in the login Keychain (Security framework, service `local.updateworkbench.proxy`) and are answered on proxy challenges. Homebrew/mas receive the proxy host and port through `http_proxy`/`https_proxy`/`all_proxy`, never the password.
 - **Notifications:** optional (Settings → General) banners for newly available updates (each version announced once) and for completed or failed updates.
-- **Self-update:** Settings → Updates accepts `github:owner/repository`, a GitHub repository URL, or an HTTPS Sparkle appcast. It is **disabled by default** because no release feed is published. Installation reuses the verified direct-install pipeline, so a release must match the bundle ID and Developer ID team; the ad-hoc development build cannot self-update.
+- **Self-update:** every check, and **Check for Updates…** in the app menu, reads the `appcast.xml` of the latest GitHub release. The ZIP it points to must carry a valid Ed25519 signature from the release key built into the installed app (`SUPublicEDKey`), and the new app must ship the same key, have the same bundle ID and be newer. Then it is installed through the normal direct-install pipeline and the app relaunches. Copies installed with Homebrew are updated with `brew update` and `brew upgrade --cask update-workbench` instead. Settings → Updates shows how the app was installed and where updates come from.
 - User-selected Homebrew adoption by cask token; catalog refresh; Homebrew diagnostics and cleanup.
 - Rules (Settings → Rules): ignored apps, skipped versions, and pre-release holds (global, on by default, with per-app overrides); two/four-day snoozes. Pre-releases include versions such as `-beta.1`, `b2`, `rc1`, alpha, preview or nightly, Sparkle beta channels and GitHub pre-releases.
 - Background checks Off, Daily or Weekly while the app runs (it stays in the menu bar), a menu bar icon with the update count and quick list, a Dock badge, launch at login, source filters, signature/Gatekeeper details, sanitized release notes, reveal/open actions, JSON inventory export.
@@ -117,7 +139,7 @@ Choose **Homebrew → Refresh Catalog** before checking for the newest Homebrew 
 
 ## Direct Sparkle, GitHub and Electron installs
 
-Supports complete DMG/ZIP app payloads from public HTTPS appcasts, selected GitHub releases and declared Electron feeds. Downloads use HTTPS-only redirects and size limits. If the feed publishes a SHA-512 (Electron), it must match. If the installed app declares a Sparkle Ed25519 public key, its archive signature must verify before extraction. The app also checks bundle ID, installed signing team, code signatures, Gatekeeper approval, version, and OS/CPU compatibility. Running apps must be closed first. The new app is staged in a private folder on the same volume (never beside the app), swapped in and verified; the previous version is deleted only after that succeeds and is put back if anything fails, so no copies are left behind. The scanner skips hidden and `*-backup-*` app bundles. A different signing team stops the install and asks you to review and approve that team for the app; Gatekeeper and code signing must still pass. DMGs are checked for encryption and license agreements, attached read-only with `-nobrowse -noautoopen`, must contain exactly one app with the expected bundle ID, are copied out with `ditto`, and are always detached. When a release offers both, the DMG is preferred over the ZIP. ZIPs may contain symbolic links, such as the `Versions/Current` framework links every Electron app ships, as long as each link is relative and stays inside its `.app` bundle. The ZIP directory is checked before anything is written: absolute or escaping link targets, entries below a link, path traversal, duplicates, encrypted entries and special files are rejected, and after extraction every link must resolve inside the bundle and hard links are refused. DMGs permit only bundle-internal links. Unsigned or unapproved different-team updates, encrypted disk images, protected destinations, PKG installers, deltas and unsupported payloads fail closed. Many GitHub-distributed Electron apps are unsigned or ad-hoc signed and will therefore fail closed by design.
+Supports complete DMG/ZIP app payloads from public HTTPS appcasts, selected GitHub releases and declared Electron feeds. Downloads use HTTPS-only redirects and size limits. If the feed publishes a SHA-512 (Electron), it must match. If the installed app declares a Sparkle Ed25519 public key, its archive signature must verify before extraction. Apps without a Developer ID team (ad-hoc signed) can only be replaced this way: the archive must verify against the installed app's key and the new app must carry the same key; otherwise they are refused. The app also checks bundle ID, installed signing team, code signatures, Gatekeeper approval, version, and OS/CPU compatibility. Running apps must be closed first. The new app is staged in a private folder on the same volume (never beside the app), swapped in and verified; the previous version is deleted only after that succeeds and is put back if anything fails, so no copies are left behind. The scanner skips hidden and `*-backup-*` app bundles. A different signing team stops the install and asks you to review and approve that team for the app; Gatekeeper and code signing must still pass. DMGs are checked for encryption and license agreements, attached read-only with `-nobrowse -noautoopen`, must contain exactly one app with the expected bundle ID, are copied out with `ditto`, and are always detached. When a release offers both, the DMG is preferred over the ZIP. ZIPs may contain symbolic links, such as the `Versions/Current` framework links every Electron app ships, as long as each link is relative and stays inside its `.app` bundle. The ZIP directory is checked before anything is written: absolute or escaping link targets, entries below a link, path traversal, duplicates, encrypted entries and special files are rejected, and after extraction every link must resolve inside the bundle and hard links are refused. DMGs permit only bundle-internal links. Unsigned or unapproved different-team updates, encrypted disk images, protected destinations, PKG installers, deltas and unsupported payloads fail closed. Many GitHub-distributed Electron apps are unsigned or ad-hoc signed and will therefore fail closed by design.
 
 ## Validation status
 
@@ -129,7 +151,9 @@ No real application upgrades, installs, adoptions, reinstalls, uninstalls, unpin
 
 A read-only smoke run on the development Mac found 80 apps (2 Electron feeds, 21 vendor-managed), checked both Electron feeds live (one real newer release with a native arm64 ZIP was identified, not installed), and produced Homebrew cask suggestions for 19 apps. The 0.2.0 bundle launched and was quit; GUI navigation of the new screens was not exercised by automation. GUI launch, navigation and a read-only scan of 267 apps and packages were verified for 0.1.0; see `docs/validation.md`.
 
-Not end-to-end validated: actual vendor downloads and installs (Sparkle, GitHub, Electron), Homebrew installation/adoption/reinstall/uninstall/unpin, App Store installation, Trash moves of real apps, notification delivery, authenticated proxies, self-update installation, login registration and rollback under real failure conditions. Permission states other than write access and admin membership are heuristics.
+Not end-to-end validated: actual vendor downloads and installs (Sparkle, GitHub, Electron), Homebrew installation/adoption/reinstall/uninstall/unpin, App Store installation, Trash moves of real apps, notification delivery, authenticated proxies, a self-update from the published feed (the first one will be 0.5.0 → 0.5.1), login registration and rollback under real failure conditions. Permission states other than write access and admin membership are heuristics.
+
+0.5.0 checks: the redesigned screens and the new self-update banner and Settings → Updates tab were rendered in dark and light and reviewed. A self-update was installed end to end with the real `codesign` checks into a temporary copy: a 0.5.0 build was replaced by a re-signed 0.5.1 build from a ZIP signed with the release key, and the same ZIP with altered bytes was refused. Unit tests cover signed, unsigned, wrong-key, swapped-key and key-less archives and a Developer ID app offered a team-less update.
 
 ## Known limitations
 
@@ -137,7 +161,7 @@ Not end-to-end validated: actual vendor downloads and installs (Sparkle, GitHub,
 - Vendor-managed updaters are opened, not driven; there is no in-app version check for Adobe, Microsoft, Google or Mozilla apps.
 - Electron providers other than public `github`, `generic` and `s3` (for example private GitHub, Bitbucket, Keygen, custom), and differential (blockmap) downloads, are not supported.
 - Cask matching uses app artifact names; apps whose bundle name differs from every cask artifact are not matched, and there is no automatic adoption.
-- No published self-update feed or Developer ID signing and notarization yet.
+- No Developer ID signing or notarization yet. Downloaded copies need the right-click **Open** step once; the Homebrew cask clears the download quarantine flag after installing, so Homebrew copies open normally.
 - Background checks run only while Update Workbench is open (it keeps running in the menu bar); there is no separate background agent.
 - Release notes are text only: images, tables and embedded media are dropped.
 - `hdiutil attach` prints deprecation warnings on recent macOS versions; it still works and is used because it supports license agreements.

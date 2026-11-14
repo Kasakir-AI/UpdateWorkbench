@@ -6,7 +6,16 @@ import UniformTypeIdentifiers
 @MainActor
 final class WorkbenchModel: ObservableObject {
     @Published var items: [UpdateItem] = []
-    @Published var busy = false
+    /// Updates requested while something else runs (a signer approval or license acceptance right after an
+    /// update, when the follow-up check is still going) start as soon as the app is idle again.
+    @Published var busy = false {
+        didSet {
+            guard !busy, !queuedUpdates.isEmpty else { return }
+            let next = queuedUpdates; queuedUpdates = []
+            Task { @MainActor in self.update(next) }
+        }
+    }
+    private var queuedUpdates: [UpdateItem] = []
     @Published var log = "Ready. Check for updates to scan installed applications."
     @Published var selected: String?
     @Published var search = ""
@@ -50,9 +59,14 @@ final class WorkbenchModel: ObservableObject {
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var notificationsEnabled = UserDefaults.standard.bool(forKey: "notificationsEnabled")
     @Published var permissions: [PermissionCheck] = []
-    @Published var selfUpdateRelease: SparkleRelease?
-    @Published var selfUpdateMessage = ""
-    @Published var selfUpdateInstalled = false
+    /// Result of the last "Check for Updates…" of Update Workbench itself.
+    @Published var selfCheckMessage = ""
+    @Published var checkingSelf = false
+    /// Update Workbench replaced itself; it runs the old code until it is relaunched.
+    @Published var relaunchNeeded = false
+    /// Shows the result of "Check for Updates…" from the app menu as an alert.
+    @Published var showSelfCheckResult = false
+    var installedWithHomebrew: Bool { isPreview ? false : SelfUpdate.installedWithHomebrew() }
     @Published var failures: [String: String] = [:]
     @Published var showConsole = false
     @Published var confirmUpdateAll = false
@@ -95,12 +109,15 @@ final class WorkbenchModel: ObservableObject {
         case .updates: updates.count
         case .suggestions: suggestions.count
         case .ignored: ignoredItems.count
-        case .history: history.filter { $0.result == .failed || $0.result == .restoreFailed }.isEmpty ? 0 : history.filter { $0.result == .failed || $0.result == .restoreFailed }.count
+        case .history: unresolvedFailures
         case .packages: items.filter { $0.provider == .homebrewFormula }.count
         case .applications: items.filter { $0.provider != .homebrewFormula }.count
         case .permissions: permissions.filter { $0.state == .denied }.count
         }
     }
+    /// Apps whose most recent update attempt failed. A later successful install clears the badge.
+    var unresolvedFailures: Int { HistoryEntry.unresolvedFailures(history) }
+    var selfItem: UpdateItem? { items.first(where: \.isSelf) }
     var ignoredItems: [UpdateItem] { items.filter { decision($0) != .show || isSnoozed($0) } }
     var appVersion: String { AppIdentity.version }
     var suggestions: [UpdateItem] {
@@ -151,9 +168,18 @@ final class WorkbenchModel: ObservableObject {
         NSApp?.dockTile.badgeLabel = updates.isEmpty ? nil : "\(updates.count)"
     }
     func update(_ targets: [UpdateItem]) {
-        guard !busy, !isPreview else { return }; busy = true
+        guard !isPreview else { return }
+        guard !busy else {
+            queuedUpdates += targets.filter { target in !queuedUpdates.contains { $0.id == target.id } }
+            append("Queued \(targets.map(\.name).joined(separator: ", ")); it starts when the current task finishes.")
+            return
+        }
+        busy = true
+        // A check may have finished since the request: install what the latest scan found.
+        let current = targets.map { target in items.first { $0.id == target.id } ?? target }
         Task {
-            let actionable = targets.filter(\.canUpdateDirectly)
+            // Update Workbench replaces itself last, after everything else in the batch is done.
+            let actionable = current.filter(\.canUpdateDirectly).sorted { !$0.isSelf && $1.isSelf }
             var succeeded: [String] = [], failed: [String] = []
             for (index, item) in actionable.enumerated() {
                 operation = "Updating \(index + 1) of \(actionable.count): \(item.name)"
@@ -166,6 +192,7 @@ final class WorkbenchModel: ObservableObject {
                     append(outcome.message); succeeded.append(item.name); failures.removeValue(forKey: item.id)
                     record(item, result: .installed, message: outcome.message, toVersion: outcome.installedVersion)
                     markInstalled(item, version: outcome.installedVersion)
+                    if item.isSelf { relaunchNeeded = true }
                 } catch let change as SignerChange {
                     append("\(item.name): \(change.localizedDescription)"); failed.append(item.name)
                     failures[item.id] = "Signed by a new developer team. Review it to continue."
@@ -185,6 +212,10 @@ final class WorkbenchModel: ObservableObject {
             }
             busy = false; operation = failed.isEmpty ? "Updates finished" : "\(failed.count) update(s) need attention. See Console."
             if !failed.isEmpty && signerQueue.isEmpty && licenseQueue.isEmpty { showConsole = true }
+            // "Update and Relaunch" of Update Workbench alone: start the new copy right away.
+            if relaunchNeeded, actionable.count == 1, actionable[0].isSelf, failed.isEmpty, queuedUpdates.isEmpty {
+                relaunch(); return
+            }
             presentNextPrompt()
             scan()
         }
@@ -431,37 +462,46 @@ final class WorkbenchModel: ObservableObject {
             permissions = PermissionsBackend.checks(probes)
         }
     }
-    func checkSelfUpdate() {
-        selfUpdateRelease = nil; selfUpdateInstalled = false
-        let feed: SelfUpdateFeed
-        do { feed = try SelfUpdateFeed.parse(UserDefaults.standard.string(forKey: SelfUpdateFeed.defaultsKey) ?? "") }
-        catch { selfUpdateMessage = error.localizedDescription; return }
-        guard feed != .disabled else { selfUpdateMessage = "Self-update is disabled. No release feed is configured."; return }
-        selfUpdateMessage = "Checking \(feed.description)…"
+    /// "Check for Updates…" for Update Workbench itself: reads only its signed release feed, so it is quick and
+    /// doesn't need a full scan. The result becomes the app's own entry in the list.
+    func checkSelf(announce: Bool = false) {
+        guard !isPreview, !checkingSelf else { return }
+        guard let feed = SelfUpdate.feedURL else {
+            selfCheckMessage = "This build has no release feed, so it can't check for its own updates."
+            showSelfCheckResult = announce; return
+        }
+        checkingSelf = true; selfCheckMessage = "Checking for a new version of Update Workbench…"
+        let base = selfItem ?? SelfUpdate.currentItem()
+        let allowBetas = rules.allowsPrereleases(for: base.id)
         Task {
             do {
-                selfUpdateRelease = try await SelfUpdate.check(feed, installedVersion: appVersion)
-                selfUpdateMessage = selfUpdateRelease.map { "Update Workbench \($0.version) is available." } ?? "Update Workbench is up to date."
-            } catch { selfUpdateMessage = error.localizedDescription }
+                let release = try await SparkleBackend.check(feedURL: feed, installedVersion: base.installedVersion, allowPrerelease: allowBetas)
+                var item = base
+                item.latestVersion = release?.version ?? item.installedVersion
+                item.sparkleRelease = release
+                item.isOutdated = release != nil
+                if let index = items.firstIndex(where: { $0.id == item.id }) { items[index] = item } else if release != nil { items.append(item) }
+                if let release {
+                    selfCheckMessage = "Update Workbench \(release.version) is available" + (item.provider == .homebrewCask ? " through Homebrew." : ".")
+                    if decision(item) == .show { section = .updates; selected = item.id }
+                } else {
+                    selfCheckMessage = "Update Workbench \(appVersion) is the newest version."
+                }
+                updateBadge()
+            } catch { selfCheckMessage = "Couldn't check for a new version: \(error.localizedDescription)" }
+            checkingSelf = false
+            if announce { showSelfCheckResult = true }
         }
     }
-    func installSelfUpdate() {
-        guard let release = selfUpdateRelease, !busy else { return }
-        busy = true; selfUpdateMessage = "Installing \(release.version)…"
-        Task {
-            do {
-                var options = InstallOptions(); options.trustedSigners = nil
-                let message = try await SparkleBackend.install(release: release, target: Bundle.main.bundleURL, replacingRunningSelf: true, options: options).message
-                append(message); selfUpdateMessage = message; selfUpdateInstalled = true
-            } catch { selfUpdateMessage = error.localizedDescription; append("Self-update: \(error.localizedDescription)") }
-            busy = false
-        }
-    }
+    /// Opens the freshly installed copy, then quits this one. If it can't be opened, this copy keeps running.
     func relaunch() {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, _ in
-            Task { @MainActor in NSApp.terminate(nil) }
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            Task { @MainActor in
+                if let error { self.append("Couldn't relaunch Update Workbench: \(error.localizedDescription). Quit and open it again.") }
+                else { NSApp.terminate(nil) }
+            }
         }
     }
     func exportInventory() {
@@ -517,6 +557,9 @@ struct UpdateWorkbenchApp: App {
 struct WorkbenchCommands: Commands {
     @ObservedObject var model: WorkbenchModel
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { model.checkSelf(announce: true) }.disabled(model.checkingSelf)
+        }
         CommandGroup(after: .newItem) {
             Button("Check for Updates") { model.scan() }.keyboardShortcut("r", modifiers: .command).disabled(model.busy)
             Button("Update All…") { model.section = .updates; model.confirmUpdateAll = true }

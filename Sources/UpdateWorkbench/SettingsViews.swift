@@ -32,7 +32,7 @@ struct GeneralSettingsView: View {
             } header: { Text("Background checks") } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     if let next = model.schedule.nextCheck(after: model.lastScheduledCheck) {
-                        Label("Next check \(next <= Date() ? "within a few minutes" : next.formatted(date: .abbreviated, time: .shortened))", systemImage: "clock").foregroundStyle(Theme.accent)
+                        Label("Next check \(next <= Date() ? "within a few minutes" : next.formatted(date: .abbreviated, time: .shortened))", systemImage: "clock").foregroundStyle(Pastel.lavender.ink)
                     }
                     Text("Checks only look for updates and run while Update Workbench is open (it keeps running in the menu bar). Nothing is installed automatically: every update waits for your confirmation.")
                 }
@@ -114,13 +114,13 @@ struct RuleRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.ruleName(id)).font(.callout.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 6) {
-                    if model.ignored.contains(id) { Pill(text: "Ignored", symbol: "eye.slash.fill", tint: .gray) }
-                    if let version = model.skipped[id] { Pill(text: "Skipping \(version)", symbol: "forward.end.fill", tint: Theme.indigo) }
+                    if model.ignored.contains(id) { Pill(text: "Ignored", symbol: "eye.slash.fill", tone: Pastel.slate) }
+                    if let version = model.skipped[id] { Pill(text: "Skipping \(version)", symbol: "forward.end.fill", tone: Pastel.sky) }
                     if let rule = model.prereleaseRules[id], rule != .followGlobal {
-                        Pill(text: rule == .allow ? "Betas allowed" : "Betas held", symbol: "flask.fill", tint: rule == .allow ? Theme.mint : .orange)
+                        Pill(text: rule == .allow ? "Betas allowed" : "Betas held", symbol: "flask.fill", tone: rule == .allow ? Pastel.mint : Pastel.butter)
                     }
                     if let until = model.snoozed[id], until > Date().timeIntervalSince1970 {
-                        Pill(text: "Snoozed to \(Date(timeIntervalSince1970: until).formatted(date: .abbreviated, time: .omitted))", symbol: "moon.zzz.fill", tint: .purple)
+                        Pill(text: "Snoozed to \(Date(timeIntervalSince1970: until).formatted(date: .abbreviated, time: .omitted))", symbol: "moon.zzz.fill", tone: Pastel.lilac)
                     }
                 }
             }
@@ -152,7 +152,7 @@ struct TrustSettingsView: View {
                 }
                 ForEach(model.approvals) { approval in
                     HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "person.badge.shield.checkmark.fill").font(.title3).foregroundStyle(.orange).frame(width: 26)
+                        IconTile(symbol: "person.badge.shield.checkmark.fill", tone: Pastel.peach, size: 28)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(approval.appName).font(.callout.weight(.semibold))
                             Text("\(approval.previousSignerName) (\(approval.previousTeamID)) → \(approval.signerName) (\(approval.teamID))").font(.caption).textSelection(.enabled)
@@ -271,7 +271,7 @@ struct ProxySettingsView: View {
             }
             Section {
                 HStack {
-                    if !status.isEmpty { Label(status, systemImage: status.hasPrefix("Saved") ? "checkmark.circle.fill" : "exclamationmark.circle.fill").font(.callout).foregroundStyle(status.hasPrefix("Saved") ? .green : .orange) }
+                    if !status.isEmpty { Label(status, systemImage: status.hasPrefix("Saved") ? "checkmark.circle.fill" : "exclamationmark.circle.fill").font(.callout).foregroundStyle(status.hasPrefix("Saved") ? Pastel.mint.ink : Pastel.peach.ink) }
                     Spacer()
                     Button("Remove Saved Password", role: .destructive) { removePassword() }.disabled(!passwordStored)
                     Button("Save") { save() }.keyboardShortcut(.defaultAction)
@@ -304,41 +304,51 @@ struct ProxySettingsView: View {
 
 struct SelfUpdateSettingsView: View {
     @EnvironmentObject var model: WorkbenchModel
-    @State private var feed = UserDefaults.standard.string(forKey: SelfUpdateFeed.defaultsKey) ?? ""
-    @State private var feedStatus = ""
-    @State private var confirmInstall = false
     var body: some View {
+        let homebrew = model.installedWithHomebrew
         Form {
             Section {
                 LabeledContent("Installed version") { Text(model.appVersion).font(.system(.body, design: .monospaced)) }
-                TextField("Release feed", text: $feed, prompt: Text("github:owner/repo or appcast URL"))
-                HStack {
-                    if !feedStatus.isEmpty { Text(feedStatus).font(.caption).foregroundStyle(.secondary) }
-                    Spacer()
-                    Button("Save Feed") {
-                        do {
-                            let parsed = try SelfUpdateFeed.parse(feed)
-                            UserDefaults.standard.set(feed.trimmingCharacters(in: .whitespacesAndNewlines), forKey: SelfUpdateFeed.defaultsKey)
-                            feedStatus = "Saved: \(parsed.description)"
-                        } catch { feedStatus = error.localizedDescription }
-                    }
-                    Button("Check Now") { model.checkSelfUpdate() }.disabled(model.busy)
+                LabeledContent("Installed with") {
+                    Label(homebrew ? "Homebrew" : "Direct download", systemImage: homebrew ? "mug.fill" : "arrow.down.app.fill")
+                        .foregroundStyle(homebrew ? UpdateProvider.homebrewCask.tint : Theme.accent)
                 }
-            } header: { Text("Update Workbench updates") } footer: {
-                Text("Off by default: this build has no published releases. A new copy must have the same bundle ID, be signed by the same Developer ID team, pass Gatekeeper and be newer. Locally signed development builds can't update themselves.").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+                LabeledContent("New versions come from") {
+                    Text(homebrew ? "brew upgrade --cask update-workbench" : "Signed GitHub releases").foregroundStyle(.secondary)
+                }
+                HStack(spacing: 8) {
+                    if model.checkingSelf { ProgressView().controlSize(.small) }
+                    Text(model.selfCheckMessage.isEmpty ? "Every check also looks for a new Update Workbench." : model.selfCheckMessage)
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Check Now") { model.checkSelf() }.disabled(model.checkingSelf)
+                }
+            } header: { Text("Update Workbench") } footer: {
+                Text(homebrew
+                     ? "Homebrew installed this copy, so Homebrew installs its updates too. Update Workbench refreshes the kasakir-ai/tap tap first, then relaunches."
+                     : "Each release is signed with Update Workbench's own release key. A download that isn't signed with it, or that has a different bundle ID or an older version, is never installed.")
+                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
-            if !model.selfUpdateMessage.isEmpty || model.selfUpdateRelease != nil || model.selfUpdateInstalled {
-                Section("Status") {
-                    if !model.selfUpdateMessage.isEmpty { Text(model.selfUpdateMessage).font(.callout).textSelection(.enabled) }
-                    if let release = model.selfUpdateRelease { Button("Install \(release.version)…") { confirmInstall = true }.buttonStyle(.borderedProminent).disabled(model.busy) }
-                    if model.selfUpdateInstalled { Button("Relaunch Update Workbench") { model.relaunch() } }
+            if model.relaunchNeeded {
+                Section {
+                    HStack {
+                        Label("The new version is installed. Relaunch to start using it.", systemImage: "checkmark.seal.fill").foregroundStyle(Pastel.mint.ink)
+                        Spacer()
+                        Button("Relaunch Now") { model.relaunch() }.buttonStyle(.borderedProminent)
+                    }
+                }
+            } else if let item = model.selfItem, item.isOutdated {
+                Section {
+                    HStack {
+                        Label("Update Workbench \(item.latestVersion ?? "") is available.", systemImage: "sparkles").foregroundStyle(Theme.accent)
+                        Spacer()
+                        Button("Update and Relaunch…") { model.pendingUpdate = item }.buttonStyle(.borderedProminent)
+                            .disabled(model.busy || !item.canUpdateDirectly)
+                    }
                 }
             }
         }
         .formStyle(.grouped)
-        .confirmationDialog("Install Update Workbench \(model.selfUpdateRelease?.version ?? "")?", isPresented: $confirmInstall) {
-            Button("Install") { model.installSelfUpdate() }
-        } message: { Text("The new version replaces this copy after it passes the checks; the old copy is deleted. Relaunch afterwards to use the new version.") }
     }
 }
 
@@ -378,7 +388,7 @@ struct PermissionRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(check.title.replacingOccurrences(of: NSHomeDirectory() + "/", with: "~/")).font(.headline)
-                    Pill(text: check.state.rawValue, symbol: check.state.symbol, tint: check.state.tint)
+                    Pill(text: check.state.rawValue, symbol: check.state.symbol, tone: check.state.tone)
                 }
                 Text(check.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let url = check.settingsURL {
@@ -390,8 +400,8 @@ struct PermissionRow: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(check.state == .denied ? Color.orange.opacity(0.5) : Color.secondary.opacity(0.15), lineWidth: check.state == .denied ? 1 : 0.5))
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(check.state == .denied ? AnyShapeStyle(Pastel.peach.fill.opacity(0.55)) : AnyShapeStyle(.background.secondary)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(check.state == .denied ? Pastel.peach.stroke : Color.secondary.opacity(0.15), lineWidth: check.state == .denied ? 1 : 0.5))
         .accessibilityElement(children: .contain)
     }
 }
@@ -400,14 +410,14 @@ struct PermissionsHelpView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.spacing) {
-                Label("Why these permissions matter", systemImage: "lock.shield.fill").font(.title2.weight(.bold)).foregroundStyle(Theme.mint)
-                Card(title: "App Management", symbol: "app.badge.checkmark", tint: Theme.indigo) {
+                Label("Why these permissions matter", systemImage: "lock.shield.fill").font(.title2.weight(.bold)).foregroundStyle(Pastel.mint.ink)
+                Card(title: "App Management", symbol: "app.badge.checkmark", tone: Pastel.lavender) {
                     Text("macOS may block replacing apps until you allow Update Workbench under Privacy & Security → App Management. If an update fails with “Operation not permitted”, allow it there and try again.").font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
-                Card(title: "Full Disk Access", symbol: "externaldrive.fill", tint: Theme.violet) {
+                Card(title: "Full Disk Access", symbol: "externaldrive.fill", tone: Pastel.lilac) {
                     Text("Not required for normal checks. It only helps when apps live in protected folders.").font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
-                Card(title: "Notifications", symbol: "bell.badge.fill", tint: Theme.pink) {
+                Card(title: "Notifications", symbol: "bell.badge.fill", tone: Pastel.rose) {
                     Text("Optional. Turn them on in Settings → General to hear about new updates and results.").font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
                 Text("Update Workbench never asks for your password and never changes these settings for you.").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)

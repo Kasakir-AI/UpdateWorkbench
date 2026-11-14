@@ -12,4 +12,5 @@ struct OfflineSuites {
     @Test func diskImages() async throws { try await DiskImageTests.run() }
     @Test func backend() async throws { try await BackendTests.run() }
     @Test func security() async throws { try await SecurityTests.run() }
+    @Test func selfUpdate() async throws { try await SelfUpdateTests.run() }
 }

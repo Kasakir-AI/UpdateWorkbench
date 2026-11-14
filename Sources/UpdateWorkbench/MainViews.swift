@@ -70,6 +70,12 @@ struct ContentView: View {
         .confirmationDialog("Install mas with Homebrew?", isPresented: $model.confirmInstallMas) {
             Button("Install mas") { model.showConsole = true; model.installMas() }
         } message: { Text("Runs brew install mas. mas is the open-source Mac App Store command-line tool; Update Workbench uses it to check App Store apps (mas outdated) and, when you choose Update, to install them (mas update). You stay signed in to the App Store app as usual.") }
+        .alert("Update Workbench", isPresented: $model.showSelfCheckResult) {
+            if let item = model.selfItem, item.isOutdated, item.canUpdateDirectly {
+                Button("Update and Relaunch…") { model.pendingUpdate = item }
+                Button("Later", role: .cancel) {}
+            } else { Button("OK", role: .cancel) {} }
+        } message: { Text(model.selfCheckMessage) }
         .confirmationDialog("Update \(model.directUpdates.count) apps and packages?", isPresented: $model.confirmUpdateAll) {
             Button("Update All") { model.update(model.updates) }
         } message: { Text("Downloads and installations run directly. Close apps before updating them. Items requiring administrator access may fail and report the reason in Console. Apps that update through their own updater are not included.") }
@@ -91,7 +97,7 @@ struct SidebarView: View {
     }
     @ViewBuilder private func row(_ section: SidebarSection) -> some View {
         let count = model.count(section)
-        Label { Text(section.rawValue) } icon: { Image(systemName: section.symbol).foregroundStyle(section.tint) }
+        Label { Text(section.rawValue) } icon: { IconTile(symbol: section.symbol, tone: section.tone, size: 22) }
             .badge([.updates, .suggestions, .ignored, .permissions, .history].contains(section) ? count : 0)
             .help(section.subtitle)
             .tag(section)
@@ -123,7 +129,7 @@ struct StatusFooter: View {
             HStack(spacing: 6) {
                 if model.busy { ProgressView().controlSize(.small) }
                 else if !model.scanned { Image(systemName: "clock").foregroundStyle(.secondary) }
-                else { Image(systemName: model.failures.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill").foregroundStyle(model.failures.isEmpty ? .green : .orange) }
+                else { Image(systemName: model.failures.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill").foregroundStyle(model.failures.isEmpty ? Pastel.mint.ink : Pastel.peach.ink) }
                 Text(model.busy ? model.operation : (model.scanned ? "Last check \(model.lastCheck!.formatted(.relative(presentation: .named)))" : "Not checked yet"))
                     .font(.caption.weight(.medium)).lineLimit(2)
             }
@@ -131,7 +137,8 @@ struct StatusFooter: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary.opacity(0.5)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(model.failures.isEmpty ? Pastel.lavender.fill : Pastel.peach.fill))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(model.failures.isEmpty ? Pastel.lavender.stroke : Pastel.peach.stroke, lineWidth: 0.5))
         .accessibilityElement(children: .combine)
     }
 }
@@ -144,6 +151,7 @@ struct ItemListColumn: View {
                 if model.section == .updates { UpdatesHero() } else { SectionHeader(section: model.section) }
             }
             .padding([.horizontal, .top], 14)
+            if model.section == .updates { SelfUpdateBanner().padding(.horizontal, 14).padding(.top, 10) }
             if !model.items.isEmpty {
                 FilterBar().padding(.horizontal, 14).padding(.vertical, 10)
                 Divider()
@@ -171,13 +179,15 @@ struct UpdatesHero: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(HeroSummary.title(updates: count, scanned: model.scanned))
-                        .font(.title2.weight(.bold)).foregroundStyle(.white)
+                        .font(.title2.weight(.bold)).foregroundStyle(Theme.heroText)
                     Text(model.busy ? model.operation : HeroSummary.subtitle(updates: count, direct: direct, scanned: model.scanned, total: model.items.count))
-                        .font(.callout).foregroundStyle(.white.opacity(0.85)).lineLimit(3)
+                        .font(.callout).foregroundStyle(Theme.heroSecondary).lineLimit(3)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: !model.scanned ? "sparkle.magnifyingglass" : (count == 0 ? "checkmark.seal.fill" : "arrow.down.circle.fill"))
-                    .font(.system(size: 34, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
+                    .font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.heroText.opacity(0.85))
+                    .frame(width: 52, height: 52)
+                    .background(Circle().fill(Theme.frosted))
                     .accessibilityHidden(true)
             }
             HStack(spacing: 8) {
@@ -192,23 +202,20 @@ struct UpdatesHero: View {
                         .buttonStyle(HeroButtonStyle()).disabled(model.busy)
                         .help("Check for updates (⌘R)")
                 }
-                if model.busy { ProgressView().controlSize(.small).tint(.white).padding(.leading, 4) }
+                if model.busy { ProgressView().controlSize(.small).padding(.leading, 4) }
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(!model.scanned ? Theme.idleGradient : (count == 0 ? Theme.successGradient : Theme.accentGradient)))
-        .overlay(alignment: .topTrailing) {
-            Circle().fill(.white.opacity(0.08)).frame(width: 120, height: 120).offset(x: 40, y: -50).allowsHitTesting(false)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: Theme.violet.opacity(0.25), radius: 10, y: 4)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(!model.scanned ? Theme.idleGradient : (count == 0 ? Theme.successGradient : Theme.accentGradient)))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.heroText.opacity(0.08), lineWidth: 0.5))
         if model.scanned {
             HStack(spacing: 8) {
-                StatTile(value: count, label: "Updates", symbol: "arrow.down.circle.fill", tint: Theme.indigo)
-                StatTile(value: direct, label: "Install here", symbol: "bolt.fill", tint: Theme.mint)
-                StatTile(value: model.items.count, label: "Installed", symbol: "square.grid.2x2.fill", tint: Theme.violet)
-                StatTile(value: model.suggestions.count, label: "Suggestions", symbol: "lightbulb.fill", tint: SidebarSection.suggestions.tint)
+                StatTile(value: count, label: "Updates", symbol: "arrow.down.circle.fill", tone: Pastel.lavender)
+                StatTile(value: direct, label: "Install here", symbol: "bolt.fill", tone: Pastel.mint)
+                StatTile(value: model.items.count, label: "Installed", symbol: "square.grid.2x2.fill", tone: Pastel.sky)
+                StatTile(value: model.suggestions.count, label: "Suggestions", symbol: "lightbulb.fill", tone: Pastel.peach)
             }
         }
         }
@@ -221,10 +228,7 @@ struct SectionHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: section.symbol).font(.title2).foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(LinearGradient(colors: [section.tint, section.tint.opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing)))
-                .accessibilityHidden(true)
+            IconTile(symbol: section.symbol, tone: section.tone, size: 42)
             VStack(alignment: .leading, spacing: 2) {
                 Text(section.rawValue).font(.title3.weight(.semibold))
                 Text(section.subtitle).font(.callout).foregroundStyle(.secondary)
@@ -282,7 +286,7 @@ struct ItemRow: View {
                     SourceBadge(provider: item.provider)
                     if model.section == .suggestions {
                         let count = (item.repositorySuggestions ?? []).count + (item.caskSuggestions ?? []).count
-                        Pill(text: count == 1 ? "1 suggestion" : "\(count) suggestions", symbol: "lightbulb.fill", tint: SidebarSection.suggestions.tint)
+                        Pill(text: count == 1 ? "1 suggestion" : "\(count) suggestions", symbol: "lightbulb.fill", tone: Pastel.peach)
                     } else if !(model.section == .updates && status == .ready) && status != .unknown { StatusBadge(status: status) }
                 }
             }
@@ -291,15 +295,75 @@ struct ItemRow: View {
             VersionColumn(item: item)
             if model.section == .updates && item.canUpdateDirectly {
                 Button("Update") { model.pendingUpdate = item }
-                    .buttonStyle(.borderedProminent).controlSize(.small)
+                    .buttonStyle(PastelButtonStyle(tone: Pastel.lavender))
                     .disabled(model.busy)
                     .help("Update \(item.name) to \(item.latestVersion ?? "the latest version")")
             }
         }
         .padding(.vertical, 5)
         .contentShape(Rectangle())
+        .contextMenu { ItemActions(item: item) }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.name), \(item.provider.rawValue), \(status.rawValue), installed \(item.installedVersion)\(item.isOutdated ? ", available \(item.latestVersion ?? "")" : "")")
+    }
+}
+
+/// Right-click actions for a list row: the same choices as the detail pane, one click away.
+struct ItemActions: View {
+    let item: UpdateItem
+    @EnvironmentObject var model: WorkbenchModel
+    var body: some View {
+        if item.canUpdateDirectly {
+            Button(item.isSelf ? "Update and Relaunch…" : "Update to \(item.latestVersion ?? "Latest")…") { model.pendingUpdate = item }.disabled(model.busy)
+            Divider()
+        }
+        if let path = item.path {
+            Button("Open \(item.name)") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+            Divider()
+        }
+        if item.isOutdated, item.latestVersion != nil {
+            Button(model.skipped[item.id] == item.latestVersion ? "Stop Skipping This Version" : "Skip This Version") { model.skip(item) }
+        }
+        if item.isOutdated {
+            Button("Snooze for 2 Days") { model.snooze(item, days: 2) }
+            if model.snoozed[item.id] != nil { Button("Clear Snooze") { model.snooze(item, days: 0) } }
+        }
+        Button(model.ignored.contains(item.id) ? "Stop Ignoring This App" : "Ignore This App") { model.ignore(item) }
+    }
+}
+
+/// Update Workbench's own update: offered above the list, and a reminder to relaunch once it's installed.
+struct SelfUpdateBanner: View {
+    @EnvironmentObject var model: WorkbenchModel
+    var body: some View {
+        if model.relaunchNeeded {
+            banner(symbol: "checkmark.seal.fill", tone: Pastel.mint, title: "Update Workbench was updated",
+                   detail: "Relaunch to start using the new version.") {
+                Button("Relaunch") { model.relaunch() }.buttonStyle(.borderedProminent).controlSize(.small)
+            }
+        } else if let item = model.selfItem, item.isOutdated, model.decision(item) == .show {
+            banner(symbol: "sparkles", tone: Pastel.lilac, title: "Update Workbench \(item.latestVersion ?? "") is available",
+                   detail: item.provider == .homebrewCask ? "Installs with Homebrew, then relaunches." : "A signed release from the developer. It installs, then relaunches.") {
+                Button("Update and Relaunch…") { model.pendingUpdate = item }.buttonStyle(.borderedProminent).controlSize(.small)
+                    .disabled(model.busy || !item.canUpdateDirectly)
+            }
+        }
+    }
+    private func banner<Actions: View>(symbol: String, tone: Tone, title: String, detail: String, @ViewBuilder actions: () -> Actions) -> some View {
+        HStack(spacing: 12) {
+            IconTile(symbol: symbol, tone: tone, size: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            actions()
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(tone.fill.opacity(0.7)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(tone.stroke, lineWidth: 0.5))
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -356,7 +420,7 @@ struct EmptyStateView: View {
             switch model.section {
             case .updates:
                 ContentUnavailableView {
-                    Label("You're all set", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                    Label("You're all set", systemImage: "checkmark.seal.fill").foregroundStyle(Pastel.mint.ink)
                 } description: { Text("Every app and package with a known update source is up to date.") }
                 actions: { Button("Check Again") { model.scan() }.disabled(model.busy) }
             case .suggestions:
@@ -381,7 +445,7 @@ struct ConsolePanel: View {
         VStack(spacing: 0) {
             Divider()
             HStack {
-                Label("Console", systemImage: "terminal.fill").font(.caption.weight(.semibold)).foregroundStyle(Theme.mint)
+                Label("Console", systemImage: "terminal.fill").font(.caption.weight(.semibold)).foregroundStyle(Pastel.mint.ink)
                 Spacer()
                 Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(model.log, forType: .string) }
                 Button("Clear") { model.log = "Console cleared." }
@@ -399,6 +463,6 @@ struct ConsolePanel: View {
             }
         }
         .frame(height: 190)
-        .background(.black.opacity(0.25))
+        .background(Color.adaptive(light: .hex(0xF4F2FA), dark: .hex(0x000000, alpha: 0.25)))
     }
 }

@@ -11,7 +11,7 @@ enum SnapshotHarness {
             "customRoots": ["/Volumes/Apps"], "interval": 14400.0, "ignored": [String](), "skipped": [String: String](),
             "snoozed": [String: Double](), "notificationsEnabled": true, AppearanceMode.defaultsKey: AppearanceMode.dark.rawValue,
             CheckSchedule.defaultsKey: CheckSchedule.daily.rawValue,
-            SelfUpdateFeed.defaultsKey: "", ProxySettings.defaultsKey: (try? JSONEncoder().encode(ProxySettings())) ?? Data(),
+            ProxySettings.defaultsKey: (try? JSONEncoder().encode(ProxySettings())) ?? Data(),
         ]
         UserDefaults.standard.setVolatileDomain(defaults, forName: UserDefaults.argumentDomain)
         let app = NSApplication.shared
@@ -27,7 +27,7 @@ enum SnapshotHarness {
                 let view = ContentView().environmentObject(model).tint(Theme.accent)
                 if let path = render(view, size: CGSize(width: 1280, height: 800), dark: dark, name: "main-\(scenario.rawValue)-\(suffix)", folder: folder) { written.append(path) }
             }
-            let model = makeModel(.updates)
+            let model = makeModel(.selfUpdate)
             let tabs: [(String, AnyView)] = [
                 ("general", AnyView(GeneralSettingsView())), ("rules", AnyView(RulesSettingsView())), ("trust", AnyView(TrustSettingsView())),
                 ("appearance", AnyView(AppearanceSettingsView())), ("network", AnyView(ProxySettingsView())), ("updates", AnyView(SelfUpdateSettingsView())),
@@ -41,6 +41,7 @@ enum SnapshotHarness {
             let sheets: [(String, CGSize, AnyView)] = [
                 ("sheet-signer-approval", CGSize(width: 660, height: 790), AnyView(SignerApprovalSheet(change: FakeData.signerChange))),
                 ("sheet-update-notes", CGSize(width: 580, height: 560), AnyView(UpdateConfirmSheet(item: aurora))),
+                ("sheet-self-update", CGSize(width: 580, height: 500), AnyView(UpdateConfirmSheet(item: FakeData.selfItem))),
                 ("sheet-license", CGSize(width: 560, height: 480), AnyView(LicenseSheet(prompt: FakeData.license))),
                 ("menubar-panel", CGSize(width: 340, height: 440), AnyView(MenuBarPanel())),
             ]
@@ -68,6 +69,7 @@ enum SnapshotHarness {
         case console
         case permissions
         case history
+        case selfUpdate = "self-update"
     }
 
     static func makeModel(_ scenario: Scenario) -> WorkbenchModel {
@@ -105,6 +107,7 @@ enum SnapshotHarness {
             model.log = "Ready. Check for updates to scan installed applications.\n[10:41:02] Checking installed apps and update sources…\n[10:41:09] Found 14 apps and packages; 7 available updates.\n[10:42:15] Updating PixelForge…\n[10:42:16] PixelForge: Quit PixelForge before updating it."
         case .permissions: model.section = .permissions
         case .history: model.section = .history; model.selectedHistory = model.history.first?.id
+        case .selfUpdate: model.section = .updates; model.items.append(FakeData.selfItem); model.selected = "aurora"
         default: break
         }
         return model
@@ -190,6 +193,15 @@ enum FakeData {
             HistoryEntry(date: now.addingTimeInterval(-9 * 86400), itemID: "harbor", appName: "Harbor VPN", fromVersion: "2.9", toVersion: "3.0", source: "App Store",
                          result: .installed, message: "Updated through the Mac App Store."),
         ]
+    }
+
+    /// Update Workbench itself with a newer signed release, so the self-update banner and sheet render.
+    static var selfItem: UpdateItem {
+        var release = SparkleRelease(version: "0.5.1", downloadURL: URL(string: "https://github.com/Kasakir-AI/UpdateWorkbench/releases/download/v0.5.1/UpdateWorkbench-0.5.1.zip")!, releaseNotesURL: nil, signature: "c2lnbmF0dXJl")
+        release.notes = "- Softer colors in the update list\n- Fixes for the menu bar panel"
+        return UpdateItem(id: Bundle.main.bundleURL.resolvingSymlinksInPath().path, name: "Update Workbench", bundleID: "local.updateworkbench.app", path: Bundle.main.bundlePath,
+                          installedVersion: AppIdentity.version, latestVersion: "0.5.1", provider: .sparkle, feedURL: URL(string: "https://github.com/Kasakir-AI/UpdateWorkbench/releases/latest/download/appcast.xml"),
+                          isOutdated: true, detail: "A new version of Update Workbench is available.", sparkleRelease: release, requiresSparkleSignature: true)
     }
 
     static var approvals: [TrustedSignerApproval] {

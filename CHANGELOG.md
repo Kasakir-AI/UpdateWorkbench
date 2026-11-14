@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — 2026-11-14
+
+- **Self-update.** Update Workbench now updates itself. Every check, and the new **Update Workbench → Check for Updates…** command, reads `appcast.xml` from the latest GitHub release (`SUFeedURL` in Info.plist). The app shows up in Updates like any other, with a banner and **Update and Relaunch**; Settings → Updates shows the installed version, how it was installed and the result of the last check. The old configurable self-update feed (off by default, Developer ID only) is gone.
+- **Release signing.** The app has no Developer ID team, so each release ZIP is signed with an Ed25519 release key (`tools/release-key.swift`, private key in the developer's login Keychain, public key in `Resources/release-public-key.txt` and Info.plist as `SUPublicEDKey`). `make-release.sh` signs the ZIP, checks the key against the app and writes `appcast.xml`. The direct-install pipeline now accepts an app without a team only when the archive verifies against the installed app's own key and the new app ships the same key; Developer ID apps keep their team rules and never accept a team-less update.
+- **Homebrew.** New cask `update-workbench` in the `kasakir-ai/tap` tap. When Homebrew installed the app, its update runs `brew update` then `brew upgrade --cask update-workbench`, and the signed feed tells it whether a newer version exists (scans don't refresh taps). The cask removes the download quarantine flag after installing.
+- **Pastel redesign.** A new palette of soft tones (lavender, lilac, sky, mint, aqua, rose, peach, butter, coral, slate), each with a pastel surface and a deeper ink for text, in light and dark mode. Pastel hero and sheet headers with dark text, pastel source and status badges, initial tiles, stat tiles, sidebar icon tiles, card header tiles and in-row **Update** buttons.
+- **Right-click menu** on list rows: update, open, show in Finder, skip this version, snooze, ignore.
+- Fixed: approving a new developer team or accepting a disk image license right after an update did nothing, because the follow-up check was still running. Updates requested while the app is busy are now queued and start when it's idle, using the latest scan.
+- Fixed: the History badge counted every failure ever logged and never cleared. It now counts apps whose most recent attempt failed.
+- Fixed: Relaunch quit the app even when the new copy couldn't be opened.
+- Update All installs Update Workbench itself last.
+- The menu bar panel's window button reads **Show Window** (the old label was cut off).
+- Tests: `Tests/SelfUpdateTests.swift` (Ed25519-anchored installs: signed, unsigned, wrong key, swapped key, no key, Developer ID app offered a team-less update; self-update helpers; History badge).
+- Version 0.5.0 (build 8).
+
 ## 0.4.1 — 2026-11-13
 
 - Development builds no longer show up in Spotlight or Launchpad next to the installed app. `./build.sh` now builds `dist.noindex/UpdateWorkbench.app` (Spotlight skips folders ending in `.noindex`) and unregisters that copy from Launch Services. `./test.sh` creates its fixture apps and disk images in a temporary `.noindex` folder, and `./make-release.sh` stages the DMG contents in one.

@@ -5,7 +5,7 @@ import Security
 @testable import UpdateWorkbench
 
 /// Offline fixtures for Electron feeds, discovery, cask matching, management flows, permissions,
-/// notifications, proxy/Keychain and self-update. No network, brew, or real app changes.
+/// notifications and proxy/Keychain. No network, brew, or real app changes.
 enum FeatureTests {
     struct Failure: Error, CustomStringConvertible { let description: String }
     static func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
@@ -26,10 +26,9 @@ enum FeatureTests {
         try testAppRemoval()
         try testPermissions()
         try testNotifications()
-        try testSelfUpdateFeed()
         try testProxy()
         try testKeychain()
-        print("PASS: Electron feeds, SHA-512, GitHub discovery, cask matching, vendor updaters, Homebrew actions, Trash removal, permissions, notifications, self-update feed, proxy, Keychain")
+        print("PASS: Electron feeds, SHA-512, GitHub discovery, cask matching, vendor updaters, Homebrew actions, Trash removal, permissions, notifications, proxy, Keychain")
     }
 
     static func testElectronConfig() throws {
@@ -273,16 +272,6 @@ enum FeatureTests {
         try expect(UpdateNotificationPolicy.resultMessage(succeeded: ["A"], failed: [])?.title == "Updates complete", "Success text")
         try expect(UpdateNotificationPolicy.resultMessage(succeeded: [], failed: ["B"])?.title == "Update failed", "Failure text")
         try expect(UpdateNotificationPolicy.resultMessage(succeeded: ["A"], failed: ["B"])?.title == "Updates finished with errors", "Mixed text")
-    }
-
-    static func testSelfUpdateFeed() throws {
-        try expect(try SelfUpdateFeed.parse("  ") == .disabled, "Empty feed disables self-update")
-        try expect(try SelfUpdateFeed.parse("github:kasakir-ai/update-workbench") == .github("kasakir-ai/update-workbench"), "github: shorthand")
-        try expect(try SelfUpdateFeed.parse("https://github.com/owner/repo") == .github("owner/repo"), "Repository URL")
-        try expect(try SelfUpdateFeed.parse("https://updates.example.com/appcast.xml") == .appcast(URL(string: "https://updates.example.com/appcast.xml")!), "Appcast URL")
-        for bad in ["http://updates.example.com/appcast.xml", "github:bad", "https://user:pw@example.com/a.xml", "https://github.com/owner/repo/releases", "nonsense"] {
-            try expect(rejects { _ = try SelfUpdateFeed.parse(bad) }, "Invalid self-update feed rejected: \(bad)")
-        }
     }
 
     final class ChallengeSender: NSObject, URLAuthenticationChallengeSender {

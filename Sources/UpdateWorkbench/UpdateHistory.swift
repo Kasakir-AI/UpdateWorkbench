@@ -24,6 +24,13 @@ struct HistoryEntry: Codable, Identifiable, Equatable, Sendable {
     var message: String
 
     var succeeded: Bool { result == .installed || result == .restored }
+
+    /// Number of apps whose newest attempt failed; a later success for the same app resolves it.
+    static func unresolvedFailures(_ entries: [HistoryEntry]) -> Int {
+        var newest: [String: HistoryEntry] = [:]
+        for entry in entries where (newest[entry.itemID]?.date ?? .distantPast) < entry.date { newest[entry.itemID] = entry }
+        return newest.values.filter { !$0.succeeded }.count
+    }
 }
 
 /// Update history persisted as JSON, newest first, capped at 500 entries.

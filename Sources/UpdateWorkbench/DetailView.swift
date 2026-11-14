@@ -62,7 +62,7 @@ struct ItemDetail: View {
     }
 
     private var whatsNewCard: some View {
-        Card(title: "What's new in \(item.latestVersion ?? "the update")", symbol: "sparkles", tint: Theme.pink) {
+        Card(title: "What's new in \(item.latestVersion ?? "the update")", symbol: "sparkles", tone: Pastel.rose) {
             WhatsNewContent(item: item)
                 .frame(maxHeight: 260, alignment: .top)
                 .clipped()
@@ -92,14 +92,14 @@ struct ItemDetail: View {
             HStack(spacing: 14) {
                 versionBlock("Installed", item.installedVersion, color: .primary)
                 Image(systemName: "arrow.right").font(.title3.weight(.semibold))
-                    .foregroundStyle(item.isOutdated ? AnyShapeStyle(Theme.accentGradient) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(item.isOutdated ? AnyShapeStyle(Theme.inkGradient) : AnyShapeStyle(.tertiary))
                     .accessibilityHidden(true)
                 versionBlock("Available", item.latestVersion ?? "Unknown", color: item.isOutdated ? Theme.accent : .secondary)
                 Spacer(minLength: 0)
             }
             if let failure = model.failures[item.id] {
                 Label { Text("Last update failed: \(failure)").fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "exclamationmark.triangle.fill") }
-                    .font(.callout).foregroundStyle(.red)
+                    .font(.callout).foregroundStyle(Pastel.coral.ink)
             }
             HStack(spacing: 8) {
                 primaryAction
@@ -114,18 +114,18 @@ struct ItemDetail: View {
             }
             .controlSize(.large)
             if let until = model.snoozed[item.id], until > Date().timeIntervalSince1970 {
-                Label("Snoozed until \(Date(timeIntervalSince1970: until).formatted(date: .abbreviated, time: .shortened))", systemImage: "moon.zzz.fill").font(.caption).foregroundStyle(.purple)
+                Label("Snoozed until \(Date(timeIntervalSince1970: until).formatted(date: .abbreviated, time: .shortened))", systemImage: "moon.zzz.fill").font(.caption).foregroundStyle(Pastel.lilac.ink)
             }
             if status == .heldBack {
                 HStack(spacing: 8) {
-                    Label("\(item.latestVersion ?? "This version") is a pre-release. Your rules hold back betas.", systemImage: "flask.fill").font(.callout).foregroundStyle(.orange)
+                    Label("\(item.latestVersion ?? "This version") is a pre-release. Your rules hold back betas.", systemImage: "flask.fill").font(.callout).foregroundStyle(Pastel.butter.ink)
                     Spacer(minLength: 0)
                     Button("Allow Betas for This App") { model.setPrereleaseRule(.allow, for: item.id) }.controlSize(.small)
                 }
             }
             if let approval = model.approvals.first(where: { $0.bundleID == item.bundleID }) {
                 Label("You approved team \(approval.teamID) (\(approval.signerName)) for this app on \(approval.approvedAt.formatted(date: .abbreviated, time: .omitted)).", systemImage: "person.badge.shield.checkmark.fill")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Pastel.peach.ink)
             }
             if item.provider == .appStore { appStoreHelp }
             if item.isOutdated && !item.canUpdateDirectly {
@@ -149,7 +149,7 @@ struct ItemDetail: View {
         } else if let failure = model.failures[item.id], AppStoreCLI.classify(failure) == .needsAdministrator {
             VStack(alignment: .leading, spacing: 6) {
                 Label("mas needs your administrator password to install App Store updates, which it can only ask for in Terminal.", systemImage: "lock.shield")
-                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    .font(.caption).foregroundStyle(Pastel.peach.ink).fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Button { model.finishInTerminal(item) } label: { Label("Finish in Terminal", systemImage: "terminal") }
                         .help("Opens Terminal and runs mas update for this app; enter your password there")
@@ -164,7 +164,7 @@ struct ItemDetail: View {
 
     @ViewBuilder private var primaryAction: some View {
         if item.canUpdateDirectly && item.isOutdated {
-            Button { model.pendingUpdate = item } label: { Label("Update to \(item.latestVersion ?? "Latest")", systemImage: "arrow.down.circle.fill") }
+            Button { model.pendingUpdate = item } label: { Label(item.isSelf ? "Update and Relaunch" : "Update to \(item.latestVersion ?? "Latest")", systemImage: "arrow.down.circle.fill") }
                 .buttonStyle(.borderedProminent).disabled(model.busy)
                 .help("Download and install the new version after confirmation")
         } else if let vendor = item.vendorUpdater {
@@ -174,7 +174,7 @@ struct ItemDetail: View {
             Button { NSWorkspace.shared.open(URL(string: "macappstore://showUpdatesPage")!) } label: { Label("Open App Store Updates", systemImage: "bag.fill") }
                 .buttonStyle(.borderedProminent)
         } else if model.status(item) == .upToDate {
-            Label("Up to date", systemImage: "checkmark.seal.fill").font(.callout.weight(.semibold)).foregroundStyle(.green)
+            Label("Up to date", systemImage: "checkmark.seal.fill").font(.callout.weight(.semibold)).foregroundStyle(Pastel.mint.ink)
         }
     }
 
@@ -209,10 +209,10 @@ struct ItemDetail: View {
     }
 
     private var aboutCard: some View {
-        Card(title: "Update source", symbol: item.provider.symbol, tint: item.provider.tint) {
+        Card(title: "Update source", symbol: item.provider.symbol, tone: item.provider.tone) {
             Text(item.provider.explanation).font(.callout)
             if !item.detail.isEmpty { Text(item.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-            if item.isPinned == true { Label("Pinned in Homebrew; excluded from upgrades until unpinned.", systemImage: "pin.fill").font(.callout).foregroundStyle(.orange) }
+            if item.isPinned == true { Label("Pinned in Homebrew; excluded from upgrades until unpinned.", systemImage: "pin.fill").font(.callout).foregroundStyle(Pastel.butter.ink) }
             if let repository = item.githubRepository { InfoRow(label: "GitHub", value: repository) }
             if let electron = item.electronUpdate { InfoRow(label: "Electron feed", value: electron.summary) }
             let links = linkList
@@ -232,7 +232,7 @@ struct ItemDetail: View {
     }
 
     private func vendorCard(_ vendor: VendorUpdater) -> some View {
-        Card(title: "Vendor updater", symbol: "building.2.fill", tint: UpdateProvider.vendor.tint) {
+        Card(title: "Vendor updater", symbol: "building.2.fill", tone: UpdateProvider.vendor.tone) {
             Text(vendor.name).font(.callout.weight(.semibold))
             Text(vendor.instructions).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("Use the Open button above. Update Workbench only opens the vendor's own updater; it does not drive private vendor update protocols.").font(.caption).foregroundStyle(.secondary)
@@ -240,7 +240,7 @@ struct ItemDetail: View {
     }
 
     private var suggestionsCard: some View {
-        Card(title: "Suggestions", symbol: "lightbulb.fill", tint: SidebarSection.suggestions.tint) {
+        Card(title: "Suggestions", symbol: "lightbulb.fill", tone: Pastel.peach) {
             ForEach(item.repositorySuggestions ?? [], id: \.self) { suggestion in
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: UpdateProvider.github.symbol).foregroundStyle(UpdateProvider.github.tint).frame(width: 18)
@@ -252,7 +252,7 @@ struct ItemDetail: View {
                     if item.githubRepository != suggestion.repository {
                         Button("Use…") { pendingRepository = suggestion.repository; confirmRepository = true }.disabled(model.busy)
                             .help("Check this repository's releases for updates (asks first)")
-                    } else { Pill(text: "In use", symbol: "checkmark", tint: .green) }
+                    } else { Pill(text: "In use", symbol: "checkmark", tone: Pastel.mint) }
                 }
             }
             ForEach(item.caskSuggestions ?? [], id: \.self) { suggestion in
@@ -262,7 +262,7 @@ struct ItemDetail: View {
                         HStack(spacing: 6) {
                             Text("Homebrew cask \(suggestion.token)\(suggestion.version.map { " \($0)" } ?? "")").font(.callout.weight(.semibold)).textSelection(.enabled)
                             Pill(text: "\(suggestion.confidence.rawValue) confidence", symbol: suggestion.confidence == .high ? "checkmark.seal.fill" : "questionmark.diamond.fill",
-                                 tint: suggestion.confidence == .high ? .green : .orange)
+                                 tone: suggestion.confidence == .high ? Pastel.mint : Pastel.butter)
                         }
                         Text(suggestion.evidence).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
@@ -276,7 +276,7 @@ struct ItemDetail: View {
     }
 
     private var detailsCard: some View {
-        Card(title: "Details", symbol: "info.circle.fill", tint: Theme.indigo) {
+        Card(title: "Details", symbol: "info.circle.fill", tone: Pastel.sky) {
             if let id = item.bundleID { InfoRow(label: "Bundle ID", value: id, monospaced: true) }
             if let path = item.path { InfoRow(label: "Location", value: abbreviatedPath(path)) }
             if let token = item.token { InfoRow(label: "Homebrew", value: token, monospaced: true) }
@@ -286,7 +286,7 @@ struct ItemDetail: View {
     }
 
     private func securityCard(_ path: String) -> some View {
-        Card(title: "App security", symbol: "checkmark.shield.fill", tint: Theme.mint) {
+        Card(title: "App security", symbol: "checkmark.shield.fill", tone: Pastel.mint) {
             Text("Checks the installed copy's code signature and Gatekeeper assessment. Read-only.").font(.caption).foregroundStyle(.secondary)
             Button {
                 inspectingSecurity = true
@@ -346,16 +346,16 @@ struct ItemDetail: View {
                 }
                 .padding(.top, 8)
             } label: {
-                Label { Text("Custom update source").font(.headline) } icon: { Image(systemName: "slider.horizontal.3").foregroundStyle(Theme.violet) }
+                HStack(spacing: 10) { IconTile(symbol: "slider.horizontal.3", tone: Pastel.lilac, size: 26); Text("Custom update source").font(.headline) }
             }
         }
     }
 
     @ViewBuilder private var manageCard: some View {
         let homebrew = (item.provider == .homebrewCask || item.provider == .homebrewFormula) && item.token != nil
-        let trashable = !homebrew && item.path.map { !$0.hasPrefix("/System/") } == true
+        let trashable = !homebrew && !item.isSelf && item.path.map { !$0.hasPrefix("/System/") } == true
         if homebrew || trashable {
-            Card(title: "Manage", symbol: "wrench.and.screwdriver.fill", tint: .red) {
+            Card(title: "Manage", symbol: "wrench.and.screwdriver.fill", tone: Pastel.coral) {
                 HStack(spacing: 8) {
                     if homebrew {
                         Button { pendingAction = .reinstall; confirmAction = true } label: { Label("Repair…", systemImage: "arrow.triangle.2.circlepath") }
@@ -363,11 +363,11 @@ struct ItemDetail: View {
                         if item.provider == .homebrewFormula && item.isPinned == true {
                             Button { pendingAction = .unpin; confirmAction = true } label: { Label("Unpin…", systemImage: "pin.slash") }
                         }
-                        Button(role: .destructive) { pendingAction = .uninstall; confirmAction = true } label: { Label("Uninstall…", systemImage: "trash").foregroundStyle(.red) }
-                            .tint(.red).help("Remove with Homebrew; user data is kept (asks first)")
+                        Button(role: .destructive) { pendingAction = .uninstall; confirmAction = true } label: { Label("Uninstall…", systemImage: "trash").foregroundStyle(Pastel.coral.ink) }
+                            .tint(Pastel.coral.ink).help("Remove with Homebrew; user data is kept (asks first)")
                     } else {
-                        Button(role: .destructive) { confirmTrash = true } label: { Label("Move to Trash…", systemImage: "trash").foregroundStyle(.red) }
-                            .tint(.red).help("Move the app bundle to the Trash; it can be restored (asks first)")
+                        Button(role: .destructive) { confirmTrash = true } label: { Label("Move to Trash…", systemImage: "trash").foregroundStyle(Pastel.coral.ink) }
+                            .tint(Pastel.coral.ink).help("Move the app bundle to the Trash; it can be restored (asks first)")
                     }
                 }
                 .buttonStyle(.bordered)

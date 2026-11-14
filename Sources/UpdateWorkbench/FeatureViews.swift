@@ -14,7 +14,7 @@ struct ReleaseNotesView: View {
                     Text(ReleaseNotes.inline(value)).font(level <= 2 ? .headline : .subheadline.weight(.semibold)).padding(.top, 2)
                 case .bullet(let value):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Circle().fill(Theme.accentGradient).frame(width: 6, height: 6).offset(y: -2).accessibilityHidden(true)
+                        Circle().fill(Theme.inkGradient).frame(width: 6, height: 6).offset(y: -2).accessibilityHidden(true)
                         Text(ReleaseNotes.inline(value)).fixedSize(horizontal: false, vertical: true)
                     }
                 case .paragraph(let value):
@@ -61,25 +61,25 @@ struct UpdateConfirmSheet: View {
             HStack(spacing: 14) {
                 AppIconView(item: item, size: 54)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Update \(item.name)").font(.title2.weight(.bold)).foregroundStyle(.white)
+                    Text(item.isSelf ? "Update and relaunch" : "Update \(item.name)").font(.title2.weight(.bold)).foregroundStyle(Theme.heroText)
                     HStack(spacing: 8) {
-                        Text(item.installedVersion).foregroundStyle(.white.opacity(0.8))
-                        Image(systemName: "arrow.right").foregroundStyle(.white.opacity(0.8))
-                        Text(item.latestVersion ?? "Latest").foregroundStyle(.white)
+                        Text(item.installedVersion).foregroundStyle(Theme.heroSecondary)
+                        Image(systemName: "arrow.right").foregroundStyle(Theme.heroSecondary)
+                        Text(item.latestVersion ?? "Latest").foregroundStyle(Theme.heroText)
                     }
                     .font(.system(.body, design: .monospaced).weight(.semibold))
                 }
                 Spacer()
-                Pill(text: item.provider.shortName, symbol: item.provider.symbol, tint: .white.opacity(0.25), prominent: true)
+                SourceBadge(provider: item.provider)
             }
             .padding(18)
             .background(Theme.accentGradient)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Card(title: "What's new in \(item.latestVersion ?? "this version")", symbol: "sparkles", tint: Theme.pink) {
+                    Card(title: "What's new in \(item.latestVersion ?? "this version")", symbol: "sparkles", tone: Pastel.rose) {
                         WhatsNewContent(item: item)
                     }
-                    Card(title: "Before it's installed", symbol: "checkmark.shield.fill", tint: Theme.mint) {
+                    Card(title: "Before it's installed", symbol: "checkmark.shield.fill", tone: Pastel.mint) {
                         ForEach(SafetyChecklist.lines(for: item), id: \.self) { line in
                             Label { Text(line).fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.mint) }
                                 .font(.callout)
@@ -91,10 +91,10 @@ struct UpdateConfirmSheet: View {
             .frame(maxHeight: 420)
             Divider()
             HStack {
-                Label("Quit \(item.name) first.", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+                Label(item.isSelf ? "Update Workbench relaunches when it's done." : "Quit \(item.name) first.", systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel", role: .cancel) { model.pendingUpdate = nil; dismiss() }.keyboardShortcut(.cancelAction)
-                Button { model.pendingUpdate = nil; dismiss(); model.update([item]) } label: { Label("Update to \(item.latestVersion ?? "Latest")", systemImage: "arrow.down.circle.fill") }
+                Button { model.pendingUpdate = nil; dismiss(); model.update([item]) } label: { Label(item.isSelf ? "Update and Relaunch" : "Update to \(item.latestVersion ?? "Latest")", systemImage: "arrow.down.circle.fill") }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(model.busy)
             }
             .padding(14)
@@ -131,25 +131,25 @@ struct SignerApprovalSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
-                Image(systemName: "person.badge.shield.checkmark.fill").font(.system(size: 34, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 54, height: 54).background(Circle().fill(.white.opacity(0.18)))
+                Image(systemName: "person.badge.shield.checkmark.fill").font(.system(size: 28, weight: .semibold)).foregroundStyle(Pastel.peach.ink)
+                    .frame(width: 54, height: 54).background(Circle().fill(Theme.frosted))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("New developer signature").font(.title2.weight(.bold)).foregroundStyle(.white)
+                    Text("New developer signature").font(.title2.weight(.bold)).foregroundStyle(Theme.heroText)
                     Text("\(change.appName) \(change.version) is signed by a different Developer ID team than the copy you have installed.")
-                        .font(.callout).foregroundStyle(.white.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
+                        .font(.callout).foregroundStyle(Theme.heroSecondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
             .padding(18)
-            .background(LinearGradient(colors: [Color(red: 0.95, green: 0.45, blue: 0.20), Theme.pink, Theme.violet], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .background(Theme.warningGradient)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(alignment: .top, spacing: 12) {
                         SignerCard(title: "Installed", identity: change.installed, highlight: false)
-                        Image(systemName: "arrow.right").font(.title3.weight(.bold)).foregroundStyle(.orange).padding(.top, 40).accessibilityHidden(true)
+                        Image(systemName: "arrow.right").font(.title3.weight(.bold)).foregroundStyle(Pastel.peach.ink).padding(.top, 40).accessibilityHidden(true)
                         SignerCard(title: "Update \(change.version)", identity: change.candidate, highlight: true)
                     }
-                    Card(title: "Checks", symbol: "checklist", tint: Theme.mint) {
+                    Card(title: "Checks", symbol: "checklist", tone: Pastel.mint) {
                         CheckLine(ok: true, text: "Code signature is valid (codesign --deep --strict).")
                         CheckLine(ok: true, text: "Gatekeeper accepted it: \(change.candidate.gatekeeper ?? "accepted").")
                         CheckLine(ok: true, text: "Bundle ID matches: \(change.bundleID).")
@@ -174,7 +174,7 @@ struct SignerApprovalSheet: View {
                 Spacer(minLength: 8)
                 Button("Don't Install", role: .cancel) { model.declineSigner(change); dismiss() }.keyboardShortcut(.cancelAction)
                 Button { model.approveSigner(change); dismiss() } label: { Label("Approve and Install", systemImage: "checkmark.shield.fill") }
-                    .buttonStyle(.borderedProminent).tint(.orange).disabled(!confirmed)
+                    .buttonStyle(.borderedProminent).tint(Pastel.peach.ink).disabled(!confirmed)
             }
             .padding(14)
         }
@@ -190,7 +190,7 @@ struct SignerCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             Text(identity.signerName).font(.headline).lineLimit(2).textSelection(.enabled)
-            Pill(text: "Team \(identity.teamID)", symbol: highlight ? "exclamationmark.triangle.fill" : "checkmark.seal.fill", tint: highlight ? .orange : .green)
+            Pill(text: "Team \(identity.teamID)", symbol: highlight ? "exclamationmark.triangle.fill" : "checkmark.seal.fill", tone: highlight ? Pastel.peach : Pastel.mint)
             VStack(alignment: .leading, spacing: 4) {
                 detail("Certificate", identity.certificateKind)
                 if identity.authorities.count > 1 { detail("Issued by", identity.authorities.dropFirst().joined(separator: " → ")) }
@@ -201,8 +201,8 @@ struct SignerCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill((highlight ? Color.orange : Color.green).opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder((highlight ? Color.orange : Color.green).opacity(0.35), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill((highlight ? Pastel.peach : Pastel.mint).fill.opacity(0.6)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder((highlight ? Pastel.peach : Pastel.mint).stroke, lineWidth: 1))
     }
     private func detail(_ label: String, _ value: String, monospaced: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -218,7 +218,7 @@ struct CheckLine: View {
     let text: String
     var body: some View {
         Label { Text(text).fixedSize(horizontal: false, vertical: true) } icon: {
-            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill").foregroundStyle(ok ? Theme.mint : .orange)
+            Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill").foregroundStyle(ok ? Pastel.mint.ink : Pastel.peach.ink)
         }
         .font(.callout)
     }
@@ -233,10 +233,10 @@ struct LicenseSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Image(systemName: "doc.text.fill").font(.title).foregroundStyle(.white)
+                Image(systemName: "doc.text.fill").font(.title).foregroundStyle(Theme.heroText)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("License agreement").font(.title2.weight(.bold)).foregroundStyle(.white)
-                    Text("\(prompt.appName) \(prompt.version) asks you to accept these terms before its disk image can be opened.").font(.callout).foregroundStyle(.white.opacity(0.9))
+                    Text("License agreement").font(.title2.weight(.bold)).foregroundStyle(Theme.heroText)
+                    Text("\(prompt.appName) \(prompt.version) asks you to accept these terms before its disk image can be opened.").font(.callout).foregroundStyle(Theme.heroSecondary)
                 }
             }
             .padding(18).frame(maxWidth: .infinity, alignment: .leading).background(Theme.idleGradient)
@@ -269,14 +269,15 @@ extension HistoryEntry.Result {
         case .restoreFailed: "exclamationmark.triangle.fill"
         }
     }
-    var tint: Color {
+    var tone: Tone {
         switch self {
-        case .installed: .green
-        case .failed: .red
-        case .restored: Theme.indigo
-        case .restoreFailed: .orange
+        case .installed: Pastel.mint
+        case .failed: Pastel.coral
+        case .restored: Pastel.sky
+        case .restoreFailed: Pastel.peach
         }
     }
+    var tint: Color { tone.ink }
 }
 
 struct HistoryListColumn: View {
@@ -287,10 +288,10 @@ struct HistoryListColumn: View {
                 SectionHeader(section: .history)
                 if !model.history.isEmpty {
                     HStack(spacing: 8) {
-                        StatTile(value: model.history.filter { $0.result == .installed }.count, label: "Installed", symbol: "checkmark.circle.fill", tint: .green)
-                        StatTile(value: model.history.filter { $0.result == .failed || $0.result == .restoreFailed }.count, label: "Failed", symbol: "xmark.octagon.fill", tint: .red)
-                        StatTile(value: Set(model.history.map(\.appName)).count, label: "Apps", symbol: "square.grid.2x2.fill", tint: Theme.indigo)
-                        StatTile(value: model.history.filter { $0.date > Date().addingTimeInterval(-7 * 86400) }.count, label: "Last 7 days", symbol: "calendar", tint: Theme.violet)
+                        StatTile(value: model.history.filter { $0.result == .installed }.count, label: "Installed", symbol: "checkmark.circle.fill", tone: Pastel.mint)
+                        StatTile(value: model.history.filter { $0.result == .failed || $0.result == .restoreFailed }.count, label: "Failed", symbol: "xmark.octagon.fill", tone: Pastel.coral)
+                        StatTile(value: Set(model.history.map(\.appName)).count, label: "Apps", symbol: "square.grid.2x2.fill", tone: Pastel.sky)
+                        StatTile(value: model.history.filter { $0.date > Date().addingTimeInterval(-7 * 86400) }.count, label: "Last 7 days", symbol: "calendar", tone: Pastel.lavender)
                     }
                 }
             }
@@ -323,7 +324,7 @@ struct HistoryRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(entry.appName).font(.headline).lineLimit(1)
                 HStack(spacing: 6) {
-                    Pill(text: entry.result.rawValue, symbol: entry.result.symbol, tint: entry.result.tint)
+                    Pill(text: entry.result.rawValue, symbol: entry.result.symbol, tone: entry.result.tone)
                 }
             }
             Spacer(minLength: 6)
@@ -344,9 +345,7 @@ struct HistoryDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.spacing) {
                 HStack(spacing: 14) {
-                    Image(systemName: entry.result.symbol).font(.system(size: 30, weight: .semibold)).foregroundStyle(.white)
-                        .frame(width: 60, height: 60)
-                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(LinearGradient(colors: [entry.result.tint, entry.result.tint.opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing)))
+                    IconTile(symbol: entry.result.symbol, tone: entry.result.tone, size: 60)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(entry.appName).font(.title.weight(.bold))
                         Text("\(entry.result.rawValue) · \(entry.date.formatted(date: .complete, time: .shortened))").foregroundStyle(.secondary)
@@ -355,13 +354,13 @@ struct HistoryDetail: View {
                 Card {
                     HStack(spacing: 14) {
                         version("From", entry.fromVersion, .primary)
-                        Image(systemName: "arrow.right").font(.title3.weight(.semibold)).foregroundStyle(Theme.accentGradient)
+                        Image(systemName: "arrow.right").font(.title3.weight(.semibold)).foregroundStyle(Theme.inkGradient)
                         version("To", entry.toVersion, Theme.accent)
                         Spacer()
                     }
                     Text(entry.message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 }
-                Card(title: "Details", symbol: "info.circle.fill", tint: Theme.indigo) {
+                Card(title: "Details", symbol: "info.circle.fill", tone: Pastel.sky) {
                     InfoRow(label: "Source", value: entry.source)
                     if let bundle = entry.bundleID { InfoRow(label: "Bundle ID", value: bundle, monospaced: true) }
                     if let path = entry.appPath { InfoRow(label: "Location", value: abbreviatedPath(path)) }
@@ -401,15 +400,15 @@ struct MenuBarPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(HeroSummary.title(updates: updates.count, scanned: model.scanned)).font(.headline).foregroundStyle(.white)
-                    Text(statusLine).font(.caption).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
+                    Text(HeroSummary.title(updates: updates.count, scanned: model.scanned)).font(.headline).foregroundStyle(Theme.heroText)
+                    Text(statusLine).font(.caption).foregroundStyle(Theme.heroSecondary).lineLimit(2)
                 }
                 Spacer()
-                if model.busy { ProgressView().controlSize(.small).tint(.white) }
-                else { Image(systemName: updates.isEmpty ? "checkmark.seal.fill" : "arrow.down.circle.fill").font(.title2).foregroundStyle(.white.opacity(0.9)) }
+                if model.busy { ProgressView().controlSize(.small) }
+                else { Image(systemName: updates.isEmpty ? "checkmark.seal.fill" : "arrow.down.circle.fill").font(.title2).foregroundStyle(Theme.heroText.opacity(0.85)) }
             }
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(!model.scanned ? Theme.idleGradient : (updates.isEmpty ? Theme.successGradient : Theme.accentGradient)))
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(!model.scanned ? Theme.idleGradient : (updates.isEmpty ? Theme.successGradient : Theme.accentGradient)))
             if !updates.isEmpty {
                 VStack(spacing: 2) {
                     ForEach(updates.prefix(6)) { item in
@@ -437,7 +436,7 @@ struct MenuBarPanel: View {
             HStack(spacing: 8) {
                 Button { model.scan() } label: { Label("Check Now", systemImage: "arrow.clockwise") }
                     .buttonStyle(.borderedProminent).disabled(model.busy)
-                Button { openMain() } label: { Label("Open Update Workbench", systemImage: "macwindow") }
+                Button { openMain() } label: { Label("Show Window", systemImage: "macwindow") }
                 Spacer(minLength: 0)
             }
             .controlSize(.regular)

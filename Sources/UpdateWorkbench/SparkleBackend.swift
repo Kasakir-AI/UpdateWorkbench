@@ -140,8 +140,11 @@ enum SparkleBackend {
         try requireReplaceable(original)
         guard ["zip", "dmg"].contains(fileExtension) else { throw Failure(message: "Direct installation supports complete ZIP or DMG app bundles.") }
         if let sha512 = release.sha512 { try verifySHA512(payload, expected: sha512) }
+        // Set only when the archive passed the installed app's own Sparkle Ed25519 key.
+        var edKey: String?
         if let publicKey = AppBundleInfo.read(original)["SUPublicEDKey"] as? String {
             try verifyArchiveSignature(payload, signature: release.signature, publicKey: publicKey)
+            edKey = publicKey
         }
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("UpdateWorkbench-work-\(UUID().uuidString).noindex", isDirectory: true)
@@ -160,14 +163,18 @@ enum SparkleBackend {
             }
             defer { if fileExtension == "dmg" { DiskImage.detach(sourceRoot) } }
             return try await verifyAndReplace(sourceRoot: sourceRoot, original: original, release: release, appName: appName,
-                                              isZIP: fileExtension == "zip", isSelf: isSelf, options: options)
+                                              isZIP: fileExtension == "zip", isSelf: isSelf, verifiedEDKey: edKey, options: options)
         }.value
     }
 
     /// The checks shared by ZIP and DMG payloads, then staging and replacement. The previous copy exists only
     /// during the swap: it is deleted once the new app is in place and verified, or put back if anything fails.
+    ///
+    /// Developer ID apps must keep their signing team (or one the user approved). An app without a team
+    /// (ad-hoc signed, like Update Workbench itself) can only be replaced when `verifiedEDKey` is set: the archive
+    /// carried a valid signature from the installed app's own Ed25519 key, and the new app ships the same key.
     private static func verifyAndReplace(sourceRoot: URL, original: URL, release: SparkleRelease, appName: String,
-                                         isZIP: Bool, isSelf: Bool, options: InstallOptions) async throws -> InstallOutcome {
+                                         isZIP: Bool, isSelf: Bool, verifiedEDKey: String?, options: InstallOptions) async throws -> InstallOutcome {
         let fm = FileManager.default
         let verifier = options.verifier
         let oldInfo = AppBundleInfo.read(original)
@@ -205,18 +212,35 @@ enum SparkleBackend {
             throw Failure(message: "The downloaded app is not newer than the installed app.")
         }
         try verifier.verify(original)
-        let installedSigner = try verifier.identity(original)
-        // The candidate must pass codesign and Gatekeeper before any signer question is asked.
+        // The candidate must pass codesign (and, with a team, Gatekeeper) before any signer question is asked.
         try verifier.verify(candidate)
-        var candidateSigner = try verifier.identity(candidate)
-        candidateSigner.gatekeeper = try verifier.assess(candidate)
+        let installedTeam: String?, candidateTeam: String?
         var approved = false
-        if candidateSigner.teamID != installedSigner.teamID {
-            guard let store = options.trustedSigners, store.isApproved(bundleID: identifier, teamID: candidateSigner.teamID) else {
-                throw SignerChange(appName: appName, bundleID: identifier, version: release.version, installed: installedSigner, candidate: candidateSigner)
+        var candidateSigner: SignerIdentity?
+        if let installedSigner = try? verifier.identity(original) {
+            var signer = try verifier.identity(candidate)
+            signer.gatekeeper = try verifier.assess(candidate)
+            if signer.teamID != installedSigner.teamID {
+                guard let store = options.trustedSigners, store.isApproved(bundleID: identifier, teamID: signer.teamID) else {
+                    throw SignerChange(appName: appName, bundleID: identifier, version: release.version, installed: installedSigner, candidate: signer)
+                }
+                approved = true
             }
-            approved = true
+            installedTeam = installedSigner.teamID; candidateTeam = signer.teamID; candidateSigner = signer
+        } else {
+            guard let verifiedEDKey else { throw Failure(message: "Ad-hoc or unsigned apps cannot be replaced directly.") }
+            guard newInfo["SUPublicEDKey"] as? String == verifiedEDKey else {
+                throw Failure(message: "The update doesn't carry the same Ed25519 update key as the installed app.")
+            }
+            // A team-signed update of a team-less app still has to pass Gatekeeper.
+            if let signer = try? verifier.identity(candidate) {
+                var assessed = signer
+                assessed.gatekeeper = try verifier.assess(candidate)
+                candidateSigner = assessed
+            }
+            installedTeam = nil; candidateTeam = candidateSigner?.teamID
         }
+        func team(_ app: URL) -> String? { (try? verifier.identity(app))?.teamID }
         // Staging happens in a private replacement folder on the same volume, never beside the app.
         let workspace = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: original, create: true)
         var keepWorkspace = false
@@ -228,9 +252,9 @@ enum SparkleBackend {
         let previous = holding.appendingPathComponent("previous-" + original.lastPathComponent)
         try SyncCommand.run("/usr/bin/ditto", [candidate.path, staged.path])
         try verifier.verify(staged)
-        guard try verifier.identity(staged).teamID == candidateSigner.teamID else { throw Failure(message: "The staged app failed its signing identity check.") }
+        guard team(staged) == candidateTeam else { throw Failure(message: "The staged app failed its signing identity check.") }
         // Re-check the original identity immediately before replacing it.
-        guard AppBundleInfo.read(original)["CFBundleIdentifier"] as? String == identifier, try verifier.identity(original).teamID == installedSigner.teamID else {
+        guard AppBundleInfo.read(original)["CFBundleIdentifier"] as? String == identifier, team(original) == installedTeam else {
             throw Failure(message: "The installed app changed while downloading. Scan again.")
         }
         let isRunning = await MainActor.run {
@@ -246,7 +270,7 @@ enum SparkleBackend {
                 throw Failure(message: "The installed app didn't match the update after it was moved into place.")
             }
             try verifier.verify(original)
-            guard try verifier.identity(original).teamID == candidateSigner.teamID else { throw Failure(message: "The installed app failed its signing identity check.") }
+            guard team(original) == candidateTeam else { throw Failure(message: "The installed app failed its signing identity check.") }
         } catch {
             do {
                 if fm.fileExists(atPath: original.path) { try fm.removeItem(at: original) }
@@ -258,7 +282,10 @@ enum SparkleBackend {
             throw Failure(message: "The update was rolled back and the previous version is back in place: \(error.localizedDescription)")
         }
         try? fm.removeItem(at: previous)
-        let signerNote = approved ? " Signed by approved team \(candidateSigner.teamID) (\(candidateSigner.signerName))." : ""
+        let signerNote: String
+        if approved, let candidateSigner { signerNote = " Signed by approved team \(candidateSigner.teamID) (\(candidateSigner.signerName))." }
+        else if installedTeam == nil { signerNote = " Verified with the app's Ed25519 update key." }
+        else { signerNote = "" }
         return InstallOutcome(message: "Installed \(release.version).\(signerNote) The previous version was removed after the new one passed its checks.",
                               installedVersion: newVersion, signerApproved: approved)
     }
