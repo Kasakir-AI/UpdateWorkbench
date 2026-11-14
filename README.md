@@ -173,4 +173,4 @@ Primary implementation references: [Homebrew manpage](https://docs.brew.sh/Manpa
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Copyright (c) 2026 kasakir-ai. The license covers this project's own code and assets only. Third-party app names and trademarks belong to their owners.
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Kasakir-AI. The license covers this project's own code and assets only. Third-party app names and trademarks belong to their owners.
