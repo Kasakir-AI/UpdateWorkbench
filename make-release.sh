@@ -4,6 +4,7 @@
 # Optional: RELEASE_NOTES=path/to/notes.md puts plain release notes into the feed.
 set -euo pipefail
 cd "$(dirname "$0")"
+source scripts/macos-notary.sh
 APP=dist.noindex/UpdateWorkbench.app
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$APP/Contents/Info.plist")"
@@ -15,9 +16,16 @@ mkdir -p "$OUT"
 DMG="$OUT/UpdateWorkbench-$VERSION.dmg"; ZIP="$OUT/UpdateWorkbench-$VERSION.zip"
 rm -f "$DMG" "$ZIP" "$OUT/SHA256SUMS" "$OUT/appcast.xml"
 /usr/bin/ditto "$APP" "$STAGE/Update Workbench.app"
+sign_app="$STAGE/Update Workbench.app"
+codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$sign_app"
+notarize_app "$sign_app" "$STAGE_ROOT/notary.zip"
 ln -s /Applications "$STAGE/Applications"
 /usr/bin/hdiutil create -quiet -volname "Update Workbench" -srcfolder "$STAGE" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG" >/dev/null
-/usr/bin/ditto -c -k --norsrc --noextattr --noqtn --keepParent "$STAGE/Update Workbench.app" "$ZIP"
+notarize_dmg "$DMG"
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$sign_app" "$ZIP"
+ditto -x -k "$ZIP" "$STAGE_ROOT/unzipped"
+verify_signature "$STAGE_ROOT/unzipped/Update Workbench.app"
+xcrun stapler validate "$STAGE_ROOT/unzipped/Update Workbench.app"
 (cd "$OUT" && /usr/bin/shasum -a 256 "$(basename "$DMG")" "$(basename "$ZIP")" > SHA256SUMS)
 # Sign the ZIP and check the signature against the key built into the app before publishing anything.
 SIGNATURE="$(xcrun swift tools/release-key.swift sign "$ZIP")"

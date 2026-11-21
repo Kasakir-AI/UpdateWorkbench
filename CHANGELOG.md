@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 — 2026-11-21
+
+- Update Workbench is signed with Developer ID and notarized by Apple. Downloaded and Homebrew copies open through the normal macOS security checks.
+
 ## 0.5.0 — 2026-11-14
 
 - **Self-update.** Update Workbench now updates itself. Every check, and the new **Update Workbench → Check for Updates…** command, reads `appcast.xml` from the latest GitHub release (`SUFeedURL` in Info.plist). The app shows up in Updates like any other, with a banner and **Update and Relaunch**; Settings → Updates shows the installed version, how it was installed and the result of the last check. The old configurable self-update feed (off by default, Developer ID only) is gone.

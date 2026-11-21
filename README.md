@@ -16,7 +16,7 @@ Homebrew then keeps it up to date (`brew upgrade`), and Update Workbench updates
 
 1. Download the latest `UpdateWorkbench-<version>.dmg` (or the `.zip`) from the [Releases page](https://github.com/Kasakir-AI/UpdateWorkbench/releases).
 2. Open the DMG and drag **Update Workbench** into **Applications**.
-3. **First launch:** the app is ad-hoc signed and not notarized by Apple, so macOS blocks a normal double-click the first time. Right-click (or Control-click) the app in Applications and choose **Open**, then **Open** again. Or try to open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. After that it opens normally.
+3. Open **Update Workbench** from Applications. The download is signed with Developer ID and notarized by Apple.
 
 Requires macOS 14 or newer on Apple silicon. Check the download against `SHA256SUMS` with `shasum -a 256 -c SHA256SUMS`.
 
@@ -39,6 +39,10 @@ Releases are signed with an Ed25519 release key kept in the developer's login Ke
 The version and build number are set once, at the top of `build.sh`. GitHub Actions runs `./test.sh` and `./build.sh` on every push to `main` and on pull requests.
 
 Builds go to `dist.noindex/`. Spotlight skips folders whose names end in `.noindex`, so development builds, test fixtures and release staging never appear in Spotlight or Launchpad next to the copy in Applications.
+
+## New in 0.5.1
+
+- Developer ID signing and Apple notarization for direct downloads and Homebrew installs.
 
 ## New in 0.5.0
 
@@ -161,7 +165,6 @@ Not end-to-end validated: actual vendor downloads and installs (Sparkle, GitHub,
 - Vendor-managed updaters are opened, not driven; there is no in-app version check for Adobe, Microsoft, Google or Mozilla apps.
 - Electron providers other than public `github`, `generic` and `s3` (for example private GitHub, Bitbucket, Keygen, custom), and differential (blockmap) downloads, are not supported.
 - Cask matching uses app artifact names; apps whose bundle name differs from every cask artifact are not matched, and there is no automatic adoption.
-- No Developer ID signing or notarization yet. Downloaded copies need the right-click **Open** step once; the Homebrew cask clears the download quarantine flag after installing, so Homebrew copies open normally.
 - Background checks run only while Update Workbench is open (it keeps running in the menu bar); there is no separate background agent.
 - Release notes are text only: images, tables and embedded media are dropped.
 - `hdiutil attach` prints deprecation warnings on recent macOS versions; it still works and is used because it supports license agreements.
