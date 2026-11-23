@@ -70,6 +70,7 @@ enum SnapshotHarness {
         case permissions
         case history
         case selfUpdate = "self-update"
+        case appStoreUnreadable = "app-store-unreadable"
     }
 
     static func makeModel(_ scenario: Scenario) -> WorkbenchModel {
@@ -108,6 +109,9 @@ enum SnapshotHarness {
         case .permissions: model.section = .permissions
         case .history: model.section = .history; model.selectedHistory = model.history.first?.id
         case .selfUpdate: model.section = .updates; model.items.append(FakeData.selfItem); model.selected = "aurora"
+        case .appStoreUnreadable:
+            model.section = .updates
+            model.appStoreWarning = AppStoreQueue.warning(for: "the list is in a format this version doesn't understand (a macOS update may have changed it).")
         default: break
         }
         return model

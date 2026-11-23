@@ -401,9 +401,25 @@ enum WorkflowTests {
         sqlite.arguments = [database.path, sql]
         try sqlite.run(); sqlite.waitUntilExit()
         try expect(sqlite.terminationStatus == 0, "Fixture database created")
-        let read = AppStoreQueue.read(database: database)
+        let outcome = AppStoreQueue.read(database: database)
+        guard case .pending(let pendingRows) = outcome else { throw Failure(description: "Fixture database reads: \(outcome)") }
+        let read: [AppStoreQueue.Pending]? = pendingRows
         try expect(read?.map(\.adamID) == ["545519333", "1631335820"], "Only pending rows are read: \(String(describing: read))")
-        try expect(AppStoreQueue.read(database: folder.appendingPathComponent("missing.db")) == nil, "A missing database means unknown, not up to date")
+        guard case .unavailable(let missing) = AppStoreQueue.read(database: folder.appendingPathComponent("missing.db")) else {
+            throw Failure(description: "A missing database means unknown, not up to date")
+        }
+        try expect(missing.contains("wasn't found"), "Missing list is named: \(missing)")
+        // A reshaped database (as a macOS update might leave it) is reported, not read as "no updates".
+        let reshaped = folder.appendingPathComponent("reshaped.db")
+        let make = Process()
+        make.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        make.arguments = [reshaped.path, "CREATE TABLE app_updates_v2 (bundle_id TEXT);"]
+        try make.run(); make.waitUntilExit()
+        guard case .unavailable(let changed) = AppStoreQueue.read(database: reshaped) else {
+            throw Failure(description: "A changed format must be reported")
+        }
+        try expect(changed.contains("format"), "Changed format is named: \(changed)")
+        try expect(AppStoreQueue.warning(for: changed).contains("mas only"), "The warning says what was still checked")
 
         var items = [
             UpdateItem(id: "/Applications/Prime Video.app", name: "Prime Video", bundleID: "com.amazon.aiv.AIVApp", path: "/Applications/Prime Video.app", installedVersion: "10.157", provider: .appStore, detail: ""),

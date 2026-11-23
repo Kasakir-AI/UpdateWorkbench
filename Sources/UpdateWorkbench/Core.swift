@@ -213,6 +213,9 @@ actor Engine {
     }
 
     func lastDiagnostics() -> [String] { diagnostics }
+    /// Set when the last scan couldn't read the App Store's Updates list; shown as a banner.
+    private var appStoreWarning: String?
+    func lastAppStoreWarning() -> String? { appStoreWarning }
 
     /// Refresh package metadata without installing or upgrading packages.
     func refreshHomebrewCatalog() async throws -> String {
@@ -238,6 +241,7 @@ actor Engine {
 
     func scan(rules: UpdateRules = UpdateRules()) async -> [UpdateItem] {
         diagnostics = []
+        appStoreWarning = nil
         // mas looks each app up online and can take a while, so it runs alongside the Homebrew check.
         let masTask: Task<CommandResult, Error>? = masPath.map { mas in Task { try await CommandRunner.run(mas, ["outdated", "--json"], timeout: 120) } }
         var items = Self.installedApps()
@@ -257,12 +261,24 @@ actor Engine {
             diagnostics.append("App Store apps aren't checked because mas isn't installed. Choose Homebrew → Install mas… (or run `brew install mas`), then check again.")
         }
         // The App Store's own Updates list catches what mas's lookup misses (lagging versions, iPhone and iPad apps).
-        if let pending = AppStoreQueue.read() {
+        switch AppStoreQueue.read() {
+        case .pending(let pending):
             AppStoreQueue.merge(pending, into: &items) { AppStoreQueue.locateWrappedApp(bundleID: $0) }
             if masTask != nil {
                 for index in items.indices where items[index].provider == .appStore && !items[index].isOutdated
                     && items[index].detail == "Checked with mas: no App Store update." {
                     items[index].detail = "Checked with mas and the App Store's Updates list: no update."
+                }
+            }
+        case .unavailable(let reason):
+            // Only worth a warning when there are App Store apps to miss.
+            if items.contains(where: { $0.provider == .appStore }) {
+                let warning = AppStoreQueue.warning(for: reason)
+                appStoreWarning = warning
+                diagnostics.append("App Store: " + warning)
+                for index in items.indices where items[index].provider == .appStore && !items[index].isOutdated {
+                    items[index].latestVersion = nil
+                    items[index].detail = "Checked with mas only; the App Store's Updates list couldn't be read, so an update may be missing."
                 }
             }
         }

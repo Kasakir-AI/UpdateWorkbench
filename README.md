@@ -40,6 +40,10 @@ The version and build number are set once, at the top of `build.sh`. GitHub Acti
 
 Builds go to `dist.noindex/`. Spotlight skips folders whose names end in `.noindex`, so development builds, test fixtures and release staging never appear in Spotlight or Launchpad next to the copy in Applications.
 
+## New in 0.5.4
+
+- If a check can't read the App Store's Updates list (for example after a macOS update changes it), Updates shows a warning instead of quietly reporting no App Store updates.
+
 ## New in 0.5.3
 
 - App Store updates come from the App Store's own Updates list as well as mas, so they show up right away, including iPhone and iPad apps that run on your Mac.

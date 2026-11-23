@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.4 — 2026-11-23
+
+- **A warning instead of a silent gap.** The App Store's Updates list is a file macOS keeps for itself, and a macOS update could move or change it. If a check can't read it, Updates now shows "App Store updates may be missing" with an **Open App Store** button, and the console gives the reason. App Store apps then say they were checked with mas only.
+- App Store apps no longer show "Up to date" when no check finished for them. They show as unknown until a check succeeds.
+
 ## 0.5.3 — 2026-11-23
 
 - **App Store updates are found reliably.** Checks now also read the App Store's own Updates list, so an update shows up as soon as the App Store offers it. Before, mas's lookup could lag behind by hours and miss it.

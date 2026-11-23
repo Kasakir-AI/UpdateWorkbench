@@ -83,7 +83,8 @@ enum ItemStatus: String, Sendable, Equatable {
         if item.isOutdated, let snoozedUntil, snoozedUntil > now { return .snoozed }
         if item.isOutdated { return item.canUpdateDirectly ? .ready : .manualUpdate }
         if item.provider == .vendor, item.latestVersion == nil { return .selfUpdating }
-        if item.latestVersion != nil || [.homebrewCask, .homebrewFormula, .appStore].contains(item.provider) { return .upToDate }
+        // App Store apps are "up to date" only when a check produced a version, never after a failed check.
+        if item.latestVersion != nil || [.homebrewCask, .homebrewFormula].contains(item.provider) { return .upToDate }
         return .unknown
     }
 }

@@ -36,10 +36,25 @@ enum AppStoreQueue {
         return Pending(adamID: adamID, bundleID: bundleID, name: name, latestVersion: isMacApp ? version("osx") ?? version("ios") : version("ios"), isMacApp: isMacApp)
     }
 
-    /// Pending updates, or nil when the list can't be read (no App Store use yet, a changed format, no access).
-    static func read(database: URL = defaultDatabase) -> [Pending]? {
+    /// The list is Apple's private file, so a macOS update can move or reshape it. Reading it never fails
+    /// silently: `unavailable` carries a reason that the scan shows instead of reporting "no updates".
+    enum Outcome: Equatable, Sendable {
+        case pending([Pending])
+        case unavailable(String)
+    }
+
+    static func warning(for reason: String) -> String {
+        "Update Workbench couldn't read the App Store's Updates list: \(reason) App Store apps were checked with mas only, which can miss new updates and iPhone and iPad apps. Open App Store Updates to be sure."
+    }
+
+    static func read(database: URL = defaultDatabase) -> Outcome {
         let fm = FileManager.default
-        guard fm.isReadableFile(atPath: database.path) else { return nil }
+        guard fm.fileExists(atPath: database.path) else {
+            return .unavailable("the list wasn't found (open the App Store app once, or a macOS update may have moved it).")
+        }
+        guard fm.isReadableFile(atPath: database.path) else {
+            return .unavailable("macOS didn't allow reading the list.")
+        }
         // appstoreagent keeps the database open in WAL mode; copy all three files so the read sees recent changes.
         let folder = fm.temporaryDirectory.appendingPathComponent("UpdateWorkbenchAppStore-\(UUID().uuidString)", isDirectory: true)
         defer { try? fm.removeItem(at: folder) }
@@ -52,23 +67,31 @@ enum AppStoreQueue {
                 if fm.fileExists(atPath: side.path) { try fm.copyItem(at: side, to: URL(fileURLWithPath: copy.path + suffix)) }
             }
             return query(copy)
-        } catch { return nil }
+        } catch { return .unavailable("the list couldn't be copied for reading (\(error.localizedDescription)).") }
     }
 
-    private static func query(_ url: URL) -> [Pending]? {
+    private static func query(_ url: URL) -> Outcome {
         var db: OpaquePointer?
-        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { sqlite3_close(db); return nil }
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            sqlite3_close(db); return .unavailable("the list couldn't be opened.")
+        }
         defer { sqlite3_close(db) }
         var statement: OpaquePointer?
         let sql = "SELECT CAST(item_id AS TEXT), bundle_id, metadata FROM mapi_app_update WHERE update_state = 0 ORDER BY pid"
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { sqlite3_finalize(statement); return nil }
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            sqlite3_finalize(statement)
+            return .unavailable("the list is in a format this version doesn't understand (a macOS update may have changed it).")
+        }
         defer { sqlite3_finalize(statement) }
         func text(_ column: Int32) -> String? { sqlite3_column_text(statement, column).map { String(cString: $0) } }
         var pending: [Pending] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
             if let id = text(0), let entry = parse(adamID: id, bundleID: text(1), metadata: text(2) ?? "") { pending.append(entry) }
+            result = sqlite3_step(statement)
         }
-        return pending
+        guard result == SQLITE_DONE else { return .unavailable("the list couldn't be read to the end.") }
+        return .pending(pending)
     }
 
     /// Marks listed apps as outdated. Apps mas already reported keep mas's details; apps the scan didn't list

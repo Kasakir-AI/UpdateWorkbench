@@ -152,6 +152,15 @@ struct ItemListColumn: View {
             }
             .padding([.horizontal, .top], 14)
             if model.section == .updates { SelfUpdateBanner().padding(.horizontal, 14).padding(.top, 10) }
+            if model.section == .updates, let warning = model.appStoreWarning {
+                NoticeBanner(symbol: "exclamationmark.triangle.fill", tone: Pastel.butter, title: "App Store updates may be missing",
+                             detail: "The App Store's Updates list couldn't be read, so App Store apps were checked with mas only.") {
+                    Button("Open App Store") { NSWorkspace.shared.open(URL(string: "macappstore://showUpdatesPage")!) }.controlSize(.small)
+                        .help("Opens the App Store's Updates page")
+                }
+                .help(warning)
+                .padding(.horizontal, 14).padding(.top, 10)
+            }
             if !model.items.isEmpty {
                 FilterBar().padding(.horizontal, 14).padding(.vertical, 10)
                 Divider()
@@ -350,12 +359,24 @@ struct SelfUpdateBanner: View {
             }
         }
     }
-    private func banner<Actions: View>(symbol: String, tone: Tone, title: String, detail: String, @ViewBuilder actions: () -> Actions) -> some View {
+    private func banner<Actions: View>(symbol: String, tone: Tone, title: String, detail: String, @ViewBuilder actions: @escaping () -> Actions) -> some View {
+        NoticeBanner(symbol: symbol, tone: tone, title: title, detail: detail, actions: actions)
+    }
+}
+
+/// A pastel notice above the update list: icon, title, a short explanation and its actions.
+struct NoticeBanner<Actions: View>: View {
+    let symbol: String
+    let tone: Tone
+    let title: String
+    let detail: String
+    @ViewBuilder let actions: () -> Actions
+    var body: some View {
         HStack(spacing: 12) {
             IconTile(symbol: symbol, tone: tone, size: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.callout.weight(.semibold))
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             actions()

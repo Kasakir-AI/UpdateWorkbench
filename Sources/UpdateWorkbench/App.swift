@@ -64,6 +64,8 @@ final class WorkbenchModel: ObservableObject {
     @Published var checkingSelf = false
     /// Update Workbench replaced itself; it runs the old code until it is relaunched.
     @Published var relaunchNeeded = false
+    /// Why the last check couldn't read the App Store's Updates list, if it couldn't.
+    @Published var appStoreWarning: String?
     /// Shows the result of "Check for Updates…" from the app menu as an alert.
     @Published var showSelfCheckResult = false
     var installedWithHomebrew: Bool { isPreview ? false : SelfUpdate.installedWithHomebrew() }
@@ -154,6 +156,7 @@ final class WorkbenchModel: ObservableObject {
             var scanned = await engine.scan(rules: rules)
             for index in scanned.indices { if let cached = caskSuggestionCache[scanned[index].id] { scanned[index].caskSuggestions = cached } }
             items = scanned; lastCheck = Date()
+            appStoreWarning = await engine.lastAppStoreWarning()
             for line in await engine.lastDiagnostics() { append(line) }
             append("Found \(items.count) apps and packages; \(updates.count) available updates.")
             masInstalled = AppStoreCLI.locate() != nil
