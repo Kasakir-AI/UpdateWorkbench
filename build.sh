@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 # The one place the version is set. The app reads it back from Info.plist at runtime.
-VERSION=0.5.2
-BUILD=10
+VERSION=0.5.3
+BUILD=11
 # The app is built in dist.noindex/: Spotlight skips folders ending in .noindex, so development
 # builds never show up in Spotlight or Launchpad next to the installed app.
 APP=dist.noindex/UpdateWorkbench.app

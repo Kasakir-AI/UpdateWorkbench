@@ -34,8 +34,9 @@ enum WorkflowTests {
         try testHistory()
         try testScanner()
         try testAppStoreCLI()
+        try testAppStoreQueue()
         try testWriteBackDoesNotPublish()
-        print("PASS: rules (ignore, skip, pre-release hold), schedules, release notes sanitizing, feed notes, trusted signers, history log, scanner (fresh versions, no hidden or backup copies), mas parsing and errors, write-back loop guard")
+        print("PASS: rules (ignore, skip, pre-release hold), schedules, release notes sanitizing, feed notes, trusted signers, history log, scanner (fresh versions, no hidden or backup copies), mas parsing and errors, App Store update queue, write-back loop guard")
     }
 
     /// Regression for the 0.4.0 launch hang: a control that writes its binding back with the same value
@@ -365,8 +366,64 @@ enum WorkflowTests {
 
         try expect(AppStoreCLI.validID("497799835") && !AppStoreCLI.validID("12; rm -rf /") && !AppStoreCLI.validID("") && !AppStoreCLI.validID(nil) && !AppStoreCLI.validID("１２"), "Only ASCII digit IDs")
         let script = AppStoreCLI.terminalScript(mas: "/opt/homebrew/bin/mas", adamID: "497799835", name: "Xcode $(evil)")
-        try expect(script?.contains("'/opt/homebrew/bin/mas' update 497799835") == true && script?.contains("$(evil)") == false, "Terminal script runs only mas update <id>")
+        try expect(script?.contains("'/opt/homebrew/bin/mas' update --accurate 497799835") == true && script?.contains("$(evil)") == false, "Terminal script runs only mas update --accurate <id>")
         try expect(AppStoreCLI.terminalScript(mas: "/tmp/mas", adamID: "1", name: "X") == nil && AppStoreCLI.terminalScript(mas: "/opt/homebrew/bin/mas", adamID: "1;x", name: "X") == nil, "Unknown mas paths and bad IDs are refused")
+        try expect(AppStoreCLI.lookupErrors("Error: Error Domain=NSURLErrorDomain Code=-1001 \"The request timed out.\" NSErrorFailingURLStringKey=https://itunes.apple.com/lookup?media=software&bundleId=com.iconfactory.Tot,") == ["com.iconfactory.Tot"], "Lookup failures name the apps that weren't checked")
+        try expect(AppStoreCLI.lookupErrors("").isEmpty && AppStoreCLI.lookupErrors("Warning: nothing").isEmpty, "No errors, no names")
+    }
+
+    /// The App Store's own pending-update list (appstoreagent's storeSystem.db), which mas can miss.
+    static func testAppStoreQueue() throws {
+        let macMetadata = #"{"attributes":{"name":"Amazon Prime Video","deviceFamilies":["mac","iphone"],"platformAttributes":{"ios":{"latestVersionInfo":{"versionDisplay":"10.158.1"}},"osx":{"latestVersionInfo":{"versionDisplay":"10.158"}}}}}"#
+        let iosMetadata = #"{"attributes":{"isIOSBinaryMacOSCompatible":true,"name":"Element X - Secure Chat & Call","deviceFamilies":["iphone","ipad"],"platformAttributes":{"ios":{"latestVersionInfo":{"versionDisplay":"26.11.3"}}}}}"#
+        let mac = AppStoreQueue.parse(adamID: "545519333", bundleID: "com.amazon.aiv.AIVApp", metadata: macMetadata)
+        try expect(mac == AppStoreQueue.Pending(adamID: "545519333", bundleID: "com.amazon.aiv.AIVApp", name: "Amazon Prime Video", latestVersion: "10.158", isMacApp: true), "Mac apps use the macOS version: \(String(describing: mac))")
+        let ios = AppStoreQueue.parse(adamID: "1631335820", bundleID: "io.element.elementx", metadata: iosMetadata)
+        try expect(ios?.isMacApp == false && ios?.latestVersion == "26.11.3" && ios?.name == "Element X - Secure Chat & Call", "iPhone and iPad apps use the iOS version")
+        try expect(AppStoreQueue.parse(adamID: "12;x", bundleID: nil, metadata: macMetadata) == nil, "Bad IDs are dropped")
+        try expect(AppStoreQueue.parse(adamID: "77", bundleID: "com.example.odd", metadata: "not json")?.latestVersion == nil, "Unreadable metadata still reports the update")
+
+        // A database shaped like appstoreagent's, read through a private copy.
+        let folder = TestTemp.root.appendingPathComponent("appstore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let database = folder.appendingPathComponent("storeSystem.db")
+        func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "''") + "'" }
+        let sql = """
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE mapi_app_update (pid INTEGER PRIMARY KEY, bundle_id TEXT, item_id INTEGER, metadata JSON, update_state INTEGER NOT NULL DEFAULT 0);
+        INSERT INTO mapi_app_update (bundle_id, item_id, metadata, update_state) VALUES ('com.amazon.aiv.AIVApp', 545519333, \(quoted(macMetadata)), 0);
+        INSERT INTO mapi_app_update (bundle_id, item_id, metadata, update_state) VALUES ('io.element.elementx', 1631335820, \(quoted(iosMetadata)), 0);
+        INSERT INTO mapi_app_update (bundle_id, item_id, metadata, update_state) VALUES ('com.microsoft.Word', 462054704, '{}', 1);
+        """
+        let sqlite = Process()
+        sqlite.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        sqlite.arguments = [database.path, sql]
+        try sqlite.run(); sqlite.waitUntilExit()
+        try expect(sqlite.terminationStatus == 0, "Fixture database created")
+        let read = AppStoreQueue.read(database: database)
+        try expect(read?.map(\.adamID) == ["545519333", "1631335820"], "Only pending rows are read: \(String(describing: read))")
+        try expect(AppStoreQueue.read(database: folder.appendingPathComponent("missing.db")) == nil, "A missing database means unknown, not up to date")
+
+        var items = [
+            UpdateItem(id: "/Applications/Prime Video.app", name: "Prime Video", bundleID: "com.amazon.aiv.AIVApp", path: "/Applications/Prime Video.app", installedVersion: "10.157", provider: .appStore, detail: ""),
+            UpdateItem(id: "/Applications/Dato.app", name: "Dato", bundleID: "com.sindresorhus.Dato", path: "/Applications/Dato.app", installedVersion: "5.8.4", provider: .appStore, detail: ""),
+        ]
+        AppStoreQueue.merge(read ?? [], into: &items) { bundleID in
+            bundleID == "io.element.elementx" ? (path: "/Applications/Element X.app", version: "26.11.2") : nil
+        }
+        try expect(items[0].isOutdated && items[0].latestVersion == "10.158" && items[0].token == "545519333" && items[0].canUpdateDirectly, "mas-missed Mac app becomes an update: \(items[0])")
+        try expect(!items[1].isOutdated, "Apps not in the queue are untouched")
+        let element = items.first { $0.bundleID == "io.element.elementx" }
+        try expect(element?.isOutdated == true && element?.installedVersion == "26.11.2" && element?.path == "/Applications/Element X.app"
+                   && element?.provider == .appStore && element?.token == nil && element?.canUpdateDirectly == false
+                   && element?.homepage?.absoluteString == "macappstore://apps.apple.com/app/id1631335820",
+                   "iPhone and iPad apps are listed and sent to the App Store: \(String(describing: element))")
+
+        // mas already found it: the queue doesn't add a duplicate or override mas's version.
+        var masItems = [UpdateItem(id: "mas:545519333", name: "Prime Video", installedVersion: "10.157", latestVersion: "10.158", provider: .appStore, token: "545519333", isOutdated: true, detail: "found by mas")]
+        AppStoreQueue.merge([mac!], into: &masItems) { _ in nil }
+        try expect(masItems.count == 1 && masItems[0].detail == "found by mas", "No duplicate when mas listed it")
     }
 }
 

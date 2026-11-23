@@ -40,6 +40,10 @@ The version and build number are set once, at the top of `build.sh`. GitHub Acti
 
 Builds go to `dist.noindex/`. Spotlight skips folders whose names end in `.noindex`, so development builds, test fixtures and release staging never appear in Spotlight or Launchpad next to the copy in Applications.
 
+## New in 0.5.3
+
+- App Store updates come from the App Store's own Updates list as well as mas, so they show up right away, including iPhone and iPad apps that run on your Mac.
+
 ## New in 0.5.2
 
 - A Support tab in Settings links to Ko-fi, GitHub Sponsors, and the GitHub repository.
@@ -140,7 +144,7 @@ Running the app from `dist.noindex/` registers that copy with Launch Services ag
 - Background checks Off, Daily or Weekly while the app runs (it stays in the menu bar), a menu bar icon with the update count and quick list, a Dock badge, launch at login, source filters, signature/Gatekeeper details, sanitized release notes, reveal/open actions, JSON inventory export.
 - **Trusted signer approvals** (Settings → Trust) per bundle ID and team, stored in `~/Library/Application Support/Update Workbench/trusted-signers.json`, revocable anytime.
 - **History** of every update attempt in `~/Library/Application Support/Update Workbench/history.json` (last 500). It's a log; previous versions aren't kept.
-- **Mac App Store via mas:** `mas outdated --json` during checks, `mas update <id>` after confirmation, Homebrew → Install mas… when it's missing. Because mas installs with `sudo installer`, an update that needs your administrator password is handed to Terminal (**Finish in Terminal**) or the App Store app; Update Workbench never sees the password.
+- **Mac App Store via mas and the App Store's Updates list:** `mas outdated --json` during checks, plus a read-only copy of the App Store's own pending-update list (it catches updates mas's lookup hasn't seen yet and iPhone/iPad apps, which open in the App Store app), `mas update --accurate <id>` after confirmation, Homebrew → Install mas… when it's missing. Because mas installs with `sudo installer`, an update that needs your administrator password is handed to Terminal (**Finish in Terminal**) or the App Store app; Update Workbench never sees the password.
 - Custom HTTPS feed and GitHub repository overrides keyed by bundle identifier or app path. GitHub payloads require an unambiguous native macOS ZIP/DMG; otherwise a release-page link supports manual installation. App-declared Sparkle archive signature requirements remain enforced.
 
 Choose **Homebrew → Refresh Catalog** before checking for the newest Homebrew metadata. Routine checks and cask matching deliberately avoid implicit `brew update`. Homebrew installation is required for Homebrew operations; `mas` is optional and can be installed from the Homebrew menu. This app does not install dependencies automatically. App Store installs remain subject to Apple authentication and helper/OS compatibility. Homebrew or package installers needing an administrator password can fail; the app does not collect a password or silently elevate.

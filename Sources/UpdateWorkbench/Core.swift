@@ -256,6 +256,16 @@ actor Engine {
         } else if items.contains(where: { $0.provider == .appStore }) {
             diagnostics.append("App Store apps aren't checked because mas isn't installed. Choose Homebrew → Install mas… (or run `brew install mas`), then check again.")
         }
+        // The App Store's own Updates list catches what mas's lookup misses (lagging versions, iPhone and iPad apps).
+        if let pending = AppStoreQueue.read() {
+            AppStoreQueue.merge(pending, into: &items) { AppStoreQueue.locateWrappedApp(bundleID: $0) }
+            if masTask != nil {
+                for index in items.indices where items[index].provider == .appStore && !items[index].isOutdated
+                    && items[index].detail == "Checked with mas: no App Store update." {
+                    items[index].detail = "Checked with mas and the App Store's Updates list: no update."
+                }
+            }
+        }
         // Keep requests bounded and preserve failures as unknown, never as up-to-date.
         let feeds = items.indices.compactMap { index in
             items[index].provider == .sparkle ? items[index].feedURL.map { (index, $0, items[index].installedVersion, rules.allowsPrereleases(for: items[index].id)) } : nil
@@ -401,7 +411,8 @@ actor Engine {
         case .appStore:
             guard let masPath else { throw UpdateError.unavailable("mas isn't installed. Choose Homebrew → Install mas…, or update the app in the App Store.") }
             guard let token = item.token, AppStoreCLI.validID(token) else { throw UpdateError.unavailable("The App Store ID for this app is unknown. Check for updates again.") }
-            let result = try await CommandRunner.run(masPath, ["update", token], timeout: 1800)
+            // --accurate asks the App Store itself; the default lookup can lag and report "nothing to update".
+            let result = try await CommandRunner.run(masPath, ["update", "--accurate", token], timeout: 1800)
             let text = result.output + result.errorOutput
             guard result.status == 0 else { throw UpdateError.unavailable(AppStoreCLI.message(for: text, action: "update \(item.name)")) }
             return UpdateOutcome(message: text.isEmpty ? "Updated \(item.name) through the App Store." : text, installedVersion: item.latestVersion)
@@ -640,6 +651,10 @@ actor Engine {
             guard !outdated.isEmpty else { throw UpdateError.unavailable(AppStoreCLI.message(for: text, action: "check for App Store updates")) }
             diagnostics.append("App Store: some apps couldn't be checked. " + AppStoreCLI.message(for: text, action: "check every app"))
         }
+        let unchecked = Set(AppStoreCLI.lookupErrors(result.errorOutput + result.output))
+        if result.status == 0, !unchecked.isEmpty {
+            diagnostics.append("App Store: mas couldn't look up \(unchecked.count) app\(unchecked.count == 1 ? "" : "s"); the App Store's Updates list was used for them. " + AppStoreCLI.message(for: result.errorOutput, action: "check every app"))
+        }
         for app in outdated where AppStoreCLI.validID(app.adamID) {
             if let index = AppStoreCLI.match(app, in: items) {
                 items[index].provider = .appStore
@@ -655,6 +670,10 @@ actor Engine {
             }
         }
         for index in items.indices where items[index].provider == .appStore && !items[index].isOutdated {
+            if let bundleID = items[index].bundleID, unchecked.contains(bundleID) {
+                items[index].detail = "mas couldn't look this app up this time; only the App Store's Updates list was checked."
+                continue
+            }
             items[index].latestVersion = items[index].installedVersion
             items[index].detail = "Checked with mas: no App Store update."
         }

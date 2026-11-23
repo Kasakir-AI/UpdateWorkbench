@@ -128,7 +128,7 @@ struct ItemDetail: View {
                     .font(.caption).foregroundStyle(Pastel.peach.ink)
             }
             if item.provider == .appStore { appStoreHelp }
-            if item.isOutdated && !item.canUpdateDirectly {
+            if item.isOutdated && !item.canUpdateDirectly && item.provider != .appStore {
                 Text(item.vendorUpdater != nil ? "This app updates through its own updater. Open it to install the new version." : "No verified direct update route is available for this item, so it can't be installed here.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -156,6 +156,9 @@ struct ItemDetail: View {
                     Button { NSWorkspace.shared.open(URL(string: "macappstore://showUpdatesPage")!) } label: { Label("Open App Store Updates", systemImage: "bag") }
                 }
             }
+        } else if item.isOutdated && item.token == nil {
+            Label("This is an iPhone or iPad app. mas can't update those, so finish in the App Store app's Updates page.", systemImage: "bag")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } else if item.isOutdated {
             Label("Updated with mas update\(item.token.map { " " + $0 } ?? ""). It may ask for your administrator password; if so, finish in Terminal or the App Store.", systemImage: "bag")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

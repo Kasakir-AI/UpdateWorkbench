@@ -98,6 +98,17 @@ enum AppStoreCLI {
         }
     }
 
+    /// Bundle IDs whose online lookup failed. mas prints these errors but can still exit 0, which used to read
+    /// as "no update" for every app.
+    static func lookupErrors(_ text: String) -> [String] {
+        guard text.contains("Error") else { return [] }
+        let pattern = try! NSRegularExpression(pattern: #"[?&]bundleId=([A-Za-z0-9._-]+)"#)
+        var seen = Set<String>()
+        return pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            Range(match.range(at: 1), in: text).map { String(text[$0]) }
+        }.filter { seen.insert($0).inserted }
+    }
+
     /// App Store IDs are numbers only; nothing else is ever passed to mas or Terminal.
     static func validID(_ id: String?) -> Bool {
         guard let id, !id.isEmpty, id.count <= 12 else { return false }
@@ -111,7 +122,7 @@ enum AppStoreCLI {
         return """
         #!/bin/zsh
         echo "Updating \(safeName) from the App Store with mas. macOS may ask for your administrator password."
-        '\(mas)' update \(adamID)
+        '\(mas)' update --accurate \(adamID)
         status=$?
         echo
         if [ $status -eq 0 ]; then echo "Done. Check for updates again in Update Workbench."; else echo "mas exited with status $status."; fi

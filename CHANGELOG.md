@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3 — 2026-11-23
+
+- **App Store updates are found reliably.** Checks now also read the App Store's own Updates list, so an update shows up as soon as the App Store offers it. Before, mas's lookup could lag behind by hours and miss it.
+- **iPhone and iPad apps from the App Store** that run on your Mac now appear in Updates. mas can't install those, so **Open App Store Updates** finishes them in the App Store app.
+- App Store updates run `mas update --accurate`, which asks the App Store directly. The default lookup could report "nothing to update" for an app that had one.
+- Fixed: when mas couldn't look some apps up (for example, a timeout), those apps were marked "no App Store update". They now say they couldn't be checked, and the check lists the problem.
+
 ## 0.5.2 — 2026-11-22
 
 - Settings has a Support tab with links to Ko-fi, GitHub Sponsors, and the GitHub repository.
