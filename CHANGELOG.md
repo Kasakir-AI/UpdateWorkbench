@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2 — 2026-11-22
+
+- Settings has a Support tab with links to Ko-fi, GitHub Sponsors, and the GitHub repository.
+
 ## 0.5.1 — 2026-11-21
 
 - Update Workbench is signed with Developer ID and notarized by Apple. Downloaded and Homebrew copies open through the normal macOS security checks.

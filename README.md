@@ -40,6 +40,10 @@ The version and build number are set once, at the top of `build.sh`. GitHub Acti
 
 Builds go to `dist.noindex/`. Spotlight skips folders whose names end in `.noindex`, so development builds, test fixtures and release staging never appear in Spotlight or Launchpad next to the copy in Applications.
 
+## New in 0.5.2
+
+- A Support tab in Settings links to Ko-fi, GitHub Sponsors, and the GitHub repository.
+
 ## New in 0.5.1
 
 - Developer ID signing and Apple notarization for direct downloads and Homebrew installs.

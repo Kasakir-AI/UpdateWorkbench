@@ -11,8 +11,29 @@ struct SettingsView: View {
             AppearanceSettingsView().tabItem { Label("Appearance", systemImage: "paintpalette") }
             ProxySettingsView().tabItem { Label("Network", systemImage: "network") }
             SelfUpdateSettingsView().tabItem { Label("Updates", systemImage: "arrow.down.app") }
+            SupportSettingsView().tabItem { Label("Support", systemImage: "heart") }
         }
         .frame(width: 640, height: 540)
+    }
+}
+
+struct SupportSettingsView: View {
+    static let koFi = URL(string: "https://ko-fi.com/kasakir")!
+    static let sponsors = URL(string: "https://github.com/sponsors/Kasakir-AI")!
+    static let repository = URL(string: "https://github.com/Kasakir-AI/UpdateWorkbench")!
+
+    var body: some View {
+        Form {
+            Section {
+                Link(destination: Self.koFi) { Label("Buy Me a Coffee on Ko-fi", systemImage: "cup.and.saucer") }
+                Link(destination: Self.sponsors) { Label("Sponsor on GitHub", systemImage: "heart") }
+                Link(destination: Self.repository) { Label("Star Update Workbench on GitHub", systemImage: "star") }
+            } header: { Text("Support Update Workbench") } footer: {
+                Text("Update Workbench is free. If it helps you, you can support its development.")
+                    .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 
