@@ -178,6 +178,15 @@ Primary implementation references: [Homebrew manpage](https://docs.brew.sh/Manpa
 
 Update Workbench is free. If it helps you, you can [star the repo](https://github.com/Kasakir-AI/UpdateWorkbench) or [sponsor on GitHub](https://github.com/sponsors/Kasakir-AI), once or monthly.
 
+### Sponsors
+
+<!-- sponsors:start -->
+<!-- This section is updated automatically. Edits here are overwritten. -->
+
+No sponsors featured here yet. [Become the first](https://github.com/sponsors/Kasakir-AI)!
+All sponsors: [SPONSORS.md](https://github.com/Kasakir-AI/.github/blob/main/SPONSORS.md).
+<!-- sponsors:end -->
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Kasakir-AI. The license covers this project's own code and assets only. Third-party app names and trademarks belong to their owners.
