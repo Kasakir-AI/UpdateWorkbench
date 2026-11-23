@@ -176,7 +176,7 @@ Primary implementation references: [Homebrew manpage](https://docs.brew.sh/Manpa
 
 ## Support
 
-Update Workbench is free. If it helps you, you can [star the repo](https://github.com/Kasakir-AI/UpdateWorkbench) or [sponsor on GitHub](https://github.com/sponsors/Kasakir-AI), once or monthly.
+Update Workbench is free. If it helps you, you can [star the repo](https://github.com/Kasakir-AI/UpdateWorkbench), [buy me a coffee on Ko-fi](https://ko-fi.com/kasakir), or [sponsor on GitHub](https://github.com/sponsors/Kasakir-AI), once or monthly.
 
 ### Sponsors
 
