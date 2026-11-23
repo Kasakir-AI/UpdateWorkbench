@@ -174,6 +174,10 @@ Opening an unsupported app exposes its own updater. Custom feeds, suggestions an
 
 Primary implementation references: [Homebrew manpage](https://docs.brew.sh/Manpage), [electron-builder publish configuration](https://www.electron.build/publish), [Apple UserNotifications](https://developer.apple.com/documentation/usernotifications), [Apple Keychain Services](https://developer.apple.com/documentation/security/keychain-services), [mas CLI](https://github.com/mas-cli/mas/blob/main/README.md), [Sparkle update publishing](https://sparkle-project.org/documentation/publishing/), [GitHub Releases API](https://docs.github.com/en/rest/releases/releases).
 
+## Support
+
+Update Workbench is free. If it helps you, you can [star the repo](https://github.com/Kasakir-AI/UpdateWorkbench) or [sponsor on GitHub](https://github.com/sponsors/Kasakir-AI), once or monthly.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Kasakir-AI. The license covers this project's own code and assets only. Third-party app names and trademarks belong to their owners.
