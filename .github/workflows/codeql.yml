@@ -1,6 +1,8 @@
 name: Code scanning
 
 # Swift scanning needs a full Mac build, so it runs once a week instead of on every push.
+# Pinned to macOS 26: CodeQL can't trace builds with Xcode 27 or analyze Swift 6.4
+# (https://github.blog/changelog/2026-10-19-codeql-changes-for-macos-27-xcode-27-and-swift-6-4/).
 on:
   schedule:
     - cron: "17 6 * * 1"
@@ -13,7 +15,7 @@ permissions:
 jobs:
   analyze:
     name: CodeQL (Swift)
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
